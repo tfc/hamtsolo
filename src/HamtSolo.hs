@@ -83,11 +83,15 @@ data CLArguments = CLArguments { user :: String, pass :: String, port :: Int, ho
 main :: IO ()
 main = let
     parser = CLArguments 
-        <$> O.option O.str   ( O.short 'u' <> O.long "user" <> O.value "admin" <> O.metavar "<user>")
-        <*> O.option O.str   ( O.short 'p' <> O.long "pass" <> O.value "Password123!" <> O.metavar "<password>")
-        <*> O.option O.auto  ( O.long "port" <> O.value 16994 <> O.metavar "<port>")
-        <*> O.argument O.str ( O.metavar "<host>")
-    opts = O.info parser mempty
+        <$> O.option O.str   ( O.short 'u' <> O.long "user" <> O.value "admin" <> O.metavar "<user>" <>
+                               O.help "Authentication user name" <> O.showDefault)
+        <*> O.option O.str   ( O.short 'p' <> O.long "pass" <> O.value "Password123!" <> O.metavar "<password>" <>
+                               O.help "Authentication password" <> O.showDefault)
+        <*> O.option O.auto  ( O.long "port" <> O.value 16994 <> O.metavar "<port>" <>
+                               O.help "TCP connection port" <> O.showDefault)
+        <*> O.argument O.str ( O.metavar "<host>" <> O.help "AMT host to connect to")
+    opts = O.info (O.helper <*> parser)
+      ( O.fullDesc <> O.header "hamtsolo - An Intel AMT Serial-Over-LAN (SOL) client" )
     in do
     (CLArguments user pass port host) <- O.execParser opts
     runTCPClient (clientSettings port $ B2.pack host) $ \server -> do
