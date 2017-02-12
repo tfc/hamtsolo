@@ -57,27 +57,36 @@ checkAuth = do
     liftIO $ putStrLn "SOL started"
 
 toInt :: ByteString -> Int
-toInt bs = foldl (\x y -> x + y *0x100) 0 (map fromIntegral $ B.unpack bs)
+toInt bs = foldr (\x y -> x + y * 0x100) 0 (map fromIntegral $ B.unpack bs)
 
 solPipe :: Conduit ByteString IO ByteString
 solPipe = do
     typ <- takeCE 1 =$= foldC
     case unpack typ of
-        [0x2b] -> do
-            liftIO $ putStrLn "heartbeat"
-            foo <- takeCE 7 =$= foldC
+        [0x2b] -> do -- Heartbeat from host
+            garbage1 <- takeCE 3 =$= foldC
+            heartbeatnum_ <- takeCE 2 =$= foldC
+            let heartbeatnum = toInt heartbeatnum_ 
+            liftIO $ putStrLn $ "heartbeat " ++ (show heartbeatnum)
+            garbage2 <- takeCE 2 =$= foldC
             yield $ pack [0x2b, 0, 0, 0, 3, 0, 0, 0]
 
-        [0x2a] -> do
-            liftIO $ putStrLn "Data from host!"
+        [0x2a] -> do -- actual SOL data
             garbage <- takeCE 7 =$= foldC
             sizeBytes <- takeCE 2 =$= foldC
             let bytes = toInt sizeBytes
             text <- takeCE bytes =$= foldC
-            liftIO $ B.putStrLn text
+            liftIO $ B.putStr text
             return ()
-        x -> do
-            liftIO $ putStrLn $ show x
+        [0x29] -> do -- SOL control msg
+            liftIO $ putStrLn "Control message"
+            garbage <- takeCE 9 =$= foldC
+            return ()
+        [x] -> do
+            liftIO $ putStrLn $ show $ fromIntegral x
+            error "unknown packet number "
+        [] -> error "empty input"
+        x -> liftIO $ putStrLn $ "something else" ++ (show x)
     solPipe
 
 main :: IO ()
