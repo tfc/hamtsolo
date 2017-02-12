@@ -1,14 +1,17 @@
 {-# LANGUAGE OverloadedStrings #-}
 import           Conduit
-import           Control.Monad            (void, when)
-import           Data.Attoparsec.Binary   (anyWord16le)
+import           Control.Monad              (void, when)
+import           Data.Attoparsec.Binary     (anyWord16le)
 import qualified Data.Attoparsec.ByteString as A
-import           Data.Binary              (encode, Word8, Word16)
-import           Data.ByteString          (ByteString, pack)
-import qualified Data.ByteString          as B
-import           Data.ByteString.Lazy     (toStrict)
+import           Data.Binary                (encode, Word8, Word16)
+import           Data.ByteString            (ByteString, pack)
+import qualified Data.ByteString.Char8      as B2
+import qualified Data.ByteString            as B
+import           Data.ByteString.Lazy       (toStrict)
 import           Data.Conduit.Network
-import           Data.Conduit.Attoparsec  (conduitParser, PositionRange)
+import           Data.Conduit.Attoparsec    (conduitParser, PositionRange)
+import qualified Options.Applicative        as O
+import Data.Monoid ((<>))
 
 data PrologueHostAnswer = Redirection Bool | Authentication Bool | SolStart Bool
     deriving (Show)
@@ -57,10 +60,10 @@ startSolMsg = let
 sayHello :: Conduit ByteString IO ByteString
 sayHello = yield $ pack [0x10, 0x00, 0x00, 0x00, 0x53, 0x4f, 0x4c, 0x20]
 
-reactPrologue :: Conduit (PositionRange, PrologueHostAnswer) IO ByteString
-reactPrologue = do
+reactPrologue :: String -> String -> Conduit (PositionRange, PrologueHostAnswer) IO ByteString
+reactPrologue user pass = do
     Just (_, Redirection True) <- await
-    yield $ auth_msg "admin" "Password123!"
+    yield $ auth_msg (B2.pack user) (B2.pack pass)
     Just (_, Authentication True) <- await
     yield startSolMsg
     Just (_, SolStart True) <- await
@@ -75,10 +78,20 @@ reactSolMode = do
         SolControl   -> liftIO $ putStrLn "CONTROL msg from server"
     reactSolMode
 
+data CLArguments = CLArguments { user :: String, pass :: String, port :: Int, host :: String }
+
 main :: IO ()
-main =
-    runTCPClient (clientSettings 16994 "192.168.157") $ \server -> do
+main = let
+    parser = CLArguments 
+        <$> O.option O.str   ( O.short 'u' <> O.long "user" <> O.value "admin" <> O.metavar "<user>")
+        <*> O.option O.str   ( O.short 'p' <> O.long "pass" <> O.value "Password123!" <> O.metavar "<password>")
+        <*> O.option O.auto  ( O.long "port" <> O.value 16994 <> O.metavar "<port>")
+        <*> O.argument O.str ( O.metavar "<host>")
+    opts = O.info parser mempty
+    in do
+    (CLArguments user pass port host) <- O.execParser opts
+    runTCPClient (clientSettings port $ B2.pack host) $ \server -> do
         liftIO $ putStrLn "Connected. Authenticating."
         (fromClient, ()) <- appSource server $$+ sayHello =$ appSink server
-        (fromClient2, ()) <- fromClient $$++ (conduitParser prologueParser =$= reactPrologue) =$ appSink server
+        (fromClient2, ()) <- fromClient $$++ (conduitParser prologueParser =$= (reactPrologue user pass)) =$ appSink server
         fromClient2 $$+- (conduitParser solParser =$= reactSolMode) =$ appSink server
