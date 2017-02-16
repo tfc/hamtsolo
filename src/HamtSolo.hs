@@ -9,7 +9,7 @@ import qualified Data.ByteString.Char8      as B2
 import qualified Data.ByteString            as B
 import           Data.ByteString.Lazy       (toStrict)
 import           Data.Conduit.Network
-import           Data.Conduit.Attoparsec    (conduitParser, PositionRange)
+import           Data.Conduit.Attoparsec    (conduitParser, conduitParserEither, PositionRange, ParseError)
 import qualified Options.Applicative        as O
 import Data.Monoid ((<>))
 
@@ -69,13 +69,19 @@ reactPrologue user pass = do
     Just (_, SolStart True) <- await
     liftIO $ putStrLn "Authenticated. SOL active."
 
-reactSolMode :: Conduit (PositionRange, SolPacket) IO ByteString
+reactSolMode :: Conduit (Either ParseError (PositionRange, SolPacket)) IO ByteString
 reactSolMode = do
-    Just (_, msg) <- await
-    case msg of
-        HeartBeat  n -> yield $ pack [0x2b, 0, 0, 0, 2, 0, 0, 0]
-        SolData    s -> liftIO $ B.putStr s
-        SolControl   -> liftIO $ putStrLn "CONTROL msg from server"
+    x <- await
+    case x of
+        Just m -> case m of
+            Left e -> liftIO $ putStrLn $ "parse err: " ++ (show e)
+            Right (_, msg) -> case msg of
+                HeartBeat  n -> yield $ pack [0x2b, 0, 0, 0, 2, 0, 0, 0]
+                SolData    s -> liftIO $ B.putStr s
+                SolControl   -> liftIO $ putStrLn "CONTROL msg from server"
+        Nothing -> do
+            liftIO $ putStrLn "Server closed the connection."
+            return ()
     reactSolMode
 
 data CLArguments = CLArguments { user :: String, pass :: String, port :: Int, host :: String }
@@ -98,4 +104,4 @@ main = let
         liftIO $ putStrLn "Connected. Authenticating."
         (fromClient, ()) <- appSource server $$+ sayHello =$ appSink server
         (fromClient2, ()) <- fromClient $$++ (conduitParser prologueParser =$= (reactPrologue user pass)) =$ appSink server
-        fromClient2 $$+- (conduitParser solParser =$= reactSolMode) =$ appSink server
+        fromClient2 $$+- (conduitParserEither solParser =$= reactSolMode) =$ appSink server
