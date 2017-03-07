@@ -4,6 +4,7 @@ import           Control.Monad              (void, when)
 import           Data.Attoparsec.Binary     (anyWord16le)
 import qualified Data.Attoparsec.ByteString as A
 import           Data.Binary                (encode, Word8, Word16)
+import           Data.Bits                  (testBit)
 import           Data.ByteString            (ByteString, pack)
 import qualified Data.ByteString.Char8      as B2
 import qualified Data.ByteString            as B
@@ -16,7 +17,18 @@ import Data.Monoid ((<>))
 data PrologueHostAnswer = Redirection Bool | Authentication Bool | SolStart Bool
     deriving (Show)
 
-data SolPacket = HeartBeat Int | SolData ByteString | SolControl
+data SolPacket = HeartBeat Int 
+    | SolData ByteString 
+    | SolControl { 
+        ctrlRTS          :: Bool,
+        ctrlDTR          :: Bool,
+        ctrlBreak        :: Bool,
+        statusTxOverflow :: Bool,
+        statusLoopback   :: Bool,
+        statusPower      :: Bool,
+        statusRxFlushTO  :: Bool,
+        statusTestMode   :: Bool
+      }
     deriving (Show)
 
 okPacket x n f = do { A.word8 x; bad <- A.anyWord8; A.take (n - 2); return $ f (bad == 0) }
@@ -31,7 +43,17 @@ solParser :: A.Parser SolPacket
 solParser = A.choice [ 
     do { A.word8 0x2b; A.take 3; n <- anyWord16le; A.take 2; return $ HeartBeat $ fromIntegral n },
     do { A.word8 0x2a; A.take 7; n <- anyWord16le; s <- A.take $ fromIntegral n; return $ SolData s },
-    do { A.word8 0x29; A.take 9; return SolControl }
+    do { A.word8 0x29; A.take 7; control <- A.anyWord8; status <- A.anyWord8;
+         return $ SolControl 
+                    (testBit control 0)
+                    (testBit control 1) 
+                    (testBit control 2)
+                    (testBit status 0)
+                    (testBit status 1)
+                    (testBit status 2)
+                    (testBit status 3)
+                    (testBit status 4)
+        }
     ]
 
 auth_msg :: ByteString -> ByteString -> ByteString
@@ -78,7 +100,13 @@ reactSolMode = do
             Right (_, msg) -> case msg of
                 HeartBeat  n -> yield $ pack [0x2b, 0, 0, 0, 2, 0, 0, 0]
                 SolData    s -> liftIO $ B.putStr s
-                SolControl   -> liftIO $ putStrLn "CONTROL msg from server"
+                SolControl rts dtr brk txOF loopB power rxFlTO testMode  -> liftIO $ do
+                    when rts   $ putStrLn "SOL: RTS asserted on serial"
+                    when dtr   $ putStrLn "SOL: DTR asserted on serial"
+                    when brk   $ putStrLn "SOL: DTR asserted on serial"
+                    when power $ putStrLn "SOL: power state change"
+                    when loopB $ putStrLn "SOL: loopback mode activated"
+                    return ()
         Nothing -> do
             liftIO $ putStrLn "Server closed the connection."
             return ()
