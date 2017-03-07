@@ -1,5 +1,7 @@
 # hamtsolo
 
+[![Build Status](https://travis-ci.org/tfc/hamtsolo.svg?branch=master)](https://travis-ci.org/tfc/hamtsolo)
+
 An AMT SOL client
 
 ## Usage
