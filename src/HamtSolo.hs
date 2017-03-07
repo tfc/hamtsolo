@@ -35,9 +35,9 @@ okPacket x n f = do { A.word8 x; bad <- A.anyWord8; A.take (n - 2); return $ f (
 
 prologueParser :: A.Parser PrologueHostAnswer
 prologueParser = 
-    A.choice [okPacket 0x11 13 (\x -> Redirection x),
-              okPacket 0x14  9 (\x -> Authentication x),
-              okPacket 0x21 23 (\x -> SolStart x)]
+    A.choice [okPacket 0x11 13 Redirection,
+              okPacket 0x14  9 Authentication,
+              okPacket 0x21 23 SolStart]
 
 solParser :: A.Parser SolPacket
 solParser = A.choice [ 
@@ -56,8 +56,8 @@ solParser = A.choice [
         }
     ]
 
-auth_msg :: ByteString -> ByteString -> ByteString
-auth_msg u p = let
+authMsg :: ByteString -> ByteString -> ByteString
+authMsg u p = let
     lu = B.length u
     lp = B.length p
     lg = 2 + lu + lp
@@ -85,7 +85,7 @@ sayHello = yield $ pack [0x10, 0x00, 0x00, 0x00, 0x53, 0x4f, 0x4c, 0x20]
 reactPrologue :: String -> String -> Conduit (PositionRange, PrologueHostAnswer) IO ByteString
 reactPrologue user pass = do
     Just (_, Redirection True) <- await
-    yield $ auth_msg (B2.pack user) (B2.pack pass)
+    yield $ authMsg (B2.pack user) (B2.pack pass)
     Just (_, Authentication True) <- await
     yield startSolMsg
     Just (_, SolStart True) <- await
@@ -96,7 +96,7 @@ reactSolMode = do
     x <- await
     case x of
         Just m -> case m of
-            Left e -> liftIO $ putStrLn $ "parse err: " ++ (show e)
+            Left e -> liftIO $ putStrLn $ "parse err: " ++ show e
             Right (_, msg) -> case msg of
                 HeartBeat  n -> yield $ pack [0x2b, 0, 0, 0, 2, 0, 0, 0]
                 SolData    s -> liftIO $ B.putStr s
@@ -131,5 +131,5 @@ main = let
     runTCPClient (clientSettings port $ B2.pack host) $ \server -> do
         liftIO $ putStrLn "Connected. Authenticating."
         (fromClient, ()) <- appSource server $$+ sayHello =$ appSink server
-        (fromClient2, ()) <- fromClient $$++ (conduitParser prologueParser =$= (reactPrologue user pass)) =$ appSink server
+        (fromClient2, ()) <- fromClient $$++ (conduitParser prologueParser =$= reactPrologue user pass) =$ appSink server
         fromClient2 $$+- (conduitParserEither solParser =$= reactSolMode) =$ appSink server
