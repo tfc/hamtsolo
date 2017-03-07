@@ -107,9 +107,7 @@ reactSolMode = do
                     when power $ putStrLn "SOL: power state change"
                     when loopB $ putStrLn "SOL: loopback mode activated"
                     return ()
-        Nothing -> do
-            liftIO $ putStrLn "Server closed the connection."
-            return ()
+        Nothing -> (liftIO $ putStrLn "Server closed the connection.") >> return ()
     reactSolMode
 
 data CLArguments = CLArguments { user :: String, pass :: String, port :: Int, host :: String }
