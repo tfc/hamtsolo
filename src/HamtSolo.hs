@@ -44,16 +44,10 @@ solParser = A.choice [
     do { A.word8 0x2b; A.take 3; n <- anyWord16le; A.take 2; return $ HeartBeat $ fromIntegral n },
     do { A.word8 0x2a; A.take 7; n <- anyWord16le; s <- A.take $ fromIntegral n; return $ SolData s },
     do { A.word8 0x29; A.take 7; control <- A.anyWord8; status <- A.anyWord8;
-         return $ SolControl 
-                    (testBit control 0)
-                    (testBit control 1) 
-                    (testBit control 2)
-                    (testBit status 0)
-                    (testBit status 1)
-                    (testBit status 2)
-                    (testBit status 3)
-                    (testBit status 4)
-        }
+         return $ SolControl (testBit control 0) (testBit control 1) (testBit control 2)
+                             (testBit status  0) (testBit status  1) (testBit status  2)
+                             (testBit status  3) (testBit status  4)
+       }
     ]
 
 authMsg :: ByteString -> ByteString -> ByteString
@@ -103,11 +97,11 @@ reactSolMode = do
                 SolControl rts dtr brk txOF loopB power rxFlTO testMode  -> liftIO $ do
                     when rts   $ putStrLn "SOL: RTS asserted on serial"
                     when dtr   $ putStrLn "SOL: DTR asserted on serial"
-                    when brk   $ putStrLn "SOL: DTR asserted on serial"
+                    when brk   $ putStrLn "SOL: BRK asserted on serial"
                     when power $ putStrLn "SOL: power state change"
                     when loopB $ putStrLn "SOL: loopback mode activated"
                     return ()
-        Nothing -> (liftIO $ putStrLn "Server closed the connection.") >> return ()
+        Nothing -> void (liftIO $ putStrLn "Server closed the connection.")
     reactSolMode
 
 data CLArguments = CLArguments { user :: String, pass :: String, port :: Int, host :: String }
