@@ -25,7 +25,6 @@ executable hamtsolo
                      , bytestring
                      , conduit-combinators
                      , conduit-extra
-                     , network-conduit
                      , optparse-applicative
                      , word8
   default-language:    Haskell2010
