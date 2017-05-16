@@ -37,9 +37,6 @@ data SolPacket = HeartBeat Int
       }
     deriving (Show)
 
-okPacket :: Word8 -> Int -> A.Parser Bool
-okPacket x n = do { A.word8 x; bad <- A.anyWord8; A.take (n - 2); return $ bad == 0 }
-
 solParser :: A.Parser SolPacket
 solParser = A.choice [
     do { A.word8 0x2b; A.take 3; n <- anyWord16le; A.take 2; return $ HeartBeat $ fromIntegral n },
@@ -77,18 +74,23 @@ startSolMsg = let
 sayHello :: Conduit ByteString IO ByteString
 sayHello = yield $ pack [0x10, 0x00, 0x00, 0x00, 0x53, 0x4f, 0x4c, 0x20]
 
+okPacket :: Word8 -> Int -> A.Parser Bool
+okPacket x n = do { A.word8 x; bad <- A.anyWord8; A.take (n - 2); return $ bad == 0 }
+
+acceptPacketOrThrow :: A.Parser Bool -> String -> Conduit ByteString IO ByteString
+acceptPacketOrThrow p errStr = do
+    packetGood <- sinkParser p
+    unless packetGood $ throwM $ SolInitSequenceFail errStr
+
 reactPrologue :: String -> String -> Conduit ByteString IO ByteString
 reactPrologue user pass = do
-    redirYes <- sinkParser $ okPacket 0x11 13
-    unless redirYes $ throwM $ SolInitSequenceFail "Server does not accept redirection request."
+    acceptPacketOrThrow (okPacket 0x11 13) "Server does not accept redirection request."
     yield $ authMsg (B2.pack user) (B2.pack pass)
 
-    authYes <- sinkParser $ okPacket 0x14  9
-    unless authYes $ throwM $ SolInitSequenceFail "Server does not accept authentication."
+    acceptPacketOrThrow (okPacket 0x14 9) "Server does not accept authentication."
     yield startSolMsg
 
-    solStartYes <- sinkParser $ okPacket 0x21 23
-    unless solStartYes $ throwM $ SolInitSequenceFail "Authenticated, but Server refuses SOL."
+    acceptPacketOrThrow (okPacket 0x21 23) "Authenticated, but Server refuses SOL."
 
 reactSolMode :: Conduit (Either ParseError (PositionRange, SolPacket)) IO ByteString
 reactSolMode = do
