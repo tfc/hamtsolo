@@ -13,7 +13,7 @@ import qualified Data.ByteString            as B
 import qualified Data.ByteString.Char8      as B2
 import           Data.ByteString.Lazy       (toStrict)
 import           Data.Conduit.Attoparsec    (ParseError, PositionRange,
-                                             conduitParser, conduitParserEither,
+                                             conduitParserEither,
                                              sinkParser)
 import           Data.Conduit.Network
 import           Data.Monoid                ((<>))
@@ -54,7 +54,7 @@ authMsg u p = let
     lp = fromIntegral (B.length p) :: Word8
     lg = 2 + lu + lp
     in
-    B.concat [ B.pack $ [0x13, 0, 0, 0, 1, lg, 0, 0, 0, lu], u, B.pack [lp], p ]
+    B.concat [ B.pack [0x13, 0, 0, 0, 1, lg, 0, 0, 0, lu], u, B.pack [lp], p ]
 
 startSolMsg :: ByteString
 startSolMsg = let
@@ -67,8 +67,7 @@ startSolMsg = let
     in
     B.concat [ B.pack [0x20, 0, 0, 0, 0, 0, 0, 0],
         B.concat $ map (B.reverse . toStrict . encode)
-            ([maxTxBuffer, txBufferTimeout, txOverflowTimeout, hostSessionRxTimeout,
-              hostFifoRxFlushTimeout, heartbeatInterval] :: [Word16]),
+            [maxTxBuffer, txBufferTimeout, txOverflowTimeout, hostSessionRxTimeout, hostFifoRxFlushTimeout, heartbeatInterval],
         B.pack [0, 0, 0, 0]]
 
 sayHello :: Conduit ByteString IO ByteString
