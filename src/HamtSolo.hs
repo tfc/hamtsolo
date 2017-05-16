@@ -8,7 +8,7 @@ import           Data.Attoparsec.Binary     (anyWord16le)
 import qualified Data.Attoparsec.ByteString as A
 import           Data.Binary                (Word16, Word8, encode)
 import           Data.Bits                  (testBit)
-import           Data.ByteString            (ByteString, pack)
+import           Data.ByteString            (ByteString)
 import qualified Data.ByteString            as B
 import qualified Data.ByteString.Char8      as B2
 import           Data.ByteString.Lazy       (toStrict)
@@ -50,13 +50,13 @@ solParser = A.choice [
 
 authMsg :: ByteString -> ByteString -> ByteString
 authMsg u p = let
-    lu = B.length u
-    lp = B.length p
+    lu = fromIntegral (B.length u) :: Word8
+    lp = fromIntegral (B.length p) :: Word8
     lg = 2 + lu + lp
     in
-    B.concat [ pack $ map fromIntegral [0x13, 0, 0, 0, 1, lg, 0, 0, 0, lu],
-               u, pack [fromIntegral lp], p ]
+    B.concat [ B.pack $ [0x13, 0, 0, 0, 1, lg, 0, 0, 0, lu], u, B.pack [lp], p ]
 
+startSolMsg :: ByteString
 startSolMsg = let
     maxTxBuffer            = 1000  :: Word16
     txBufferTimeout        = 100   :: Word16
@@ -65,14 +65,14 @@ startSolMsg = let
     hostFifoRxFlushTimeout = 0     :: Word16
     heartbeatInterval      = 5000  :: Word16
     in
-    B.concat [ pack $ map fromIntegral  [0x20, 0, 0, 0, 0, 0, 0, 0],
+    B.concat [ B.pack [0x20, 0, 0, 0, 0, 0, 0, 0],
         B.concat $ map (B.reverse . toStrict . encode)
             ([maxTxBuffer, txBufferTimeout, txOverflowTimeout, hostSessionRxTimeout,
               hostFifoRxFlushTimeout, heartbeatInterval] :: [Word16]),
-        pack $ map fromIntegral [0, 0, 0, 0]]
+        B.pack [0, 0, 0, 0]]
 
 sayHello :: Conduit ByteString IO ByteString
-sayHello = yield $ pack [0x10, 0x00, 0x00, 0x00, 0x53, 0x4f, 0x4c, 0x20]
+sayHello = yield $ B.pack [0x10, 0x00, 0x00, 0x00, 0x53, 0x4f, 0x4c, 0x20]
 
 okPacket :: Word8 -> Int -> A.Parser Bool
 okPacket x n = do { A.word8 x; bad <- A.anyWord8; A.take (n - 2); return $ bad == 0 }
@@ -100,7 +100,7 @@ reactSolMode = do
         Just m -> case m of
             Left e -> liftIO $ putStrLn $ "parse err: " ++ show e
             Right (_, msg) -> case msg of
-                HeartBeat  n -> yield $ pack [0x2b, 0, 0, 0, 2, 0, 0, 0]
+                HeartBeat  n -> yield $ B.pack [0x2b, 0, 0, 0, 2, 0, 0, 0]
                 SolData    s -> liftIO $ B.putStr s
                 SolControl rts dtr brk txOF loopB power rxFlTO testMode  -> liftIO $ do
                     when rts   $ putStrLn "SOL: RTS asserted on serial"
