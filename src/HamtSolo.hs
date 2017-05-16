@@ -1,30 +1,27 @@
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE DeriveDataTypeable, ScopedTypeVariables #-}
+{-# LANGUAGE DeriveDataTypeable  #-}
+{-# LANGUAGE OverloadedStrings   #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 import           Conduit
 import           Control.Exception
-import           Control.Monad              (void, when, unless)
+import           Control.Monad              (unless, void, when)
 import           Data.Attoparsec.Binary     (anyWord16le)
 import qualified Data.Attoparsec.ByteString as A
-import           Data.Binary                (encode, Word8, Word16)
+import           Data.Binary                (Word16, Word8, encode)
 import           Data.Bits                  (testBit)
 import           Data.ByteString            (ByteString, pack)
-import qualified Data.ByteString.Char8      as B2
 import qualified Data.ByteString            as B
+import qualified Data.ByteString.Char8      as B2
 import           Data.ByteString.Lazy       (toStrict)
+import           Data.Conduit.Attoparsec    (ParseError, PositionRange,
+                                             conduitParser, conduitParserEither,
+                                             sinkParser)
 import           Data.Conduit.Network
-import           Data.Conduit.Attoparsec    (sinkParser, conduitParser, conduitParserEither, PositionRange, ParseError)
-import Data.Typeable
+import           Data.Monoid                ((<>))
+import           Data.Typeable
 import qualified Options.Applicative        as O
-import Data.Monoid ((<>))
 
-data SolException =
-    RedirectionFalseException |
-    AuthenticationBadException |
-    SolStartFalseException |
-    HangupException
-    deriving (Show, Typeable)
-
-instance Exception SolException
+data SolInitSequenceFail = SolInitSequenceFail String deriving (Show, Typeable)
+instance Exception SolInitSequenceFail
 
 data SolPacket = HeartBeat Int
     | SolData ByteString
@@ -83,17 +80,15 @@ sayHello = yield $ pack [0x10, 0x00, 0x00, 0x00, 0x53, 0x4f, 0x4c, 0x20]
 reactPrologue :: String -> String -> Conduit ByteString IO ByteString
 reactPrologue user pass = do
     redirYes <- sinkParser $ okPacket 0x11 13
-    unless redirYes $ throwM RedirectionFalseException
+    unless redirYes $ throwM $ SolInitSequenceFail "Server does not accept redirection request."
     yield $ authMsg (B2.pack user) (B2.pack pass)
 
     authYes <- sinkParser $ okPacket 0x14  9
-    unless authYes $ throwM AuthenticationBadException
+    unless authYes $ throwM $ SolInitSequenceFail "Server does not accept authentication."
     yield startSolMsg
 
     solStartYes <- sinkParser $ okPacket 0x21 23
-    unless solStartYes $ throwM AuthenticationBadException
-
-    liftIO $ putStrLn "Authenticated. SOL active."
+    unless solStartYes $ throwM $ SolInitSequenceFail "Authenticated, but Server refuses SOL."
 
 reactSolMode :: Conduit (Either ParseError (PositionRange, SolPacket)) IO ByteString
 reactSolMode = do
@@ -133,5 +128,6 @@ main = let
     runTCPClient (clientSettings port $ B2.pack host) $ \server -> do
         liftIO $ putStrLn "Connected. Authenticating."
         (fromClient, ()) <- appSource server $$+ sayHello =$ appSink server
+        liftIO $ putStrLn "Authenticated. SOL active."
         (fromClient2, ()) <- fromClient $$++ reactPrologue user pass =$ appSink server
         fromClient2 $$+- (conduitParserEither solParser =$= reactSolMode) =$ appSink server
