@@ -1,29 +1,35 @@
 {-# LANGUAGE DeriveDataTypeable  #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-import           Conduit
 import           Control.Exception
-import           Control.Monad              (unless, void, when)
-import           Data.Attoparsec.Binary     (anyWord16le)
-import qualified Data.Attoparsec.ByteString as A
-import           Data.Binary                (Word16, Word8, encode)
-import           Data.Bits                  (testBit)
-import           Data.ByteString            (ByteString)
-import qualified Data.ByteString            as B
-import qualified Data.ByteString.Char8      as B2
-import           Data.ByteString.Lazy       (toStrict)
-import           Data.Conduit.Attoparsec    (ParseError, PositionRange,
-                                             conduitParserEither,
-                                             sinkParser)
+import           Control.Monad                (unless, void, when)
+import           Control.Monad.Catch          (throwM)
+import           Control.Monad.IO.Class       (liftIO, MonadIO)
+import           Control.Monad.Trans.Resource (ResourceT, runResourceT)
+import           Data.Attoparsec.Binary       (anyWord16le)
+import qualified Data.Attoparsec.ByteString   as A
+import           Data.Binary                  (Word16, Word8, encode)
+import           Data.Bits                    (testBit)
+import           Data.ByteString              (ByteString)
+import qualified Data.ByteString              as B
+import qualified Data.ByteString.Char8        as B2
+import           Data.ByteString.Lazy         (toStrict)
+import           Data.Conduit
+import qualified Data.Conduit.Combinators     as CC
+import           Data.Conduit.Attoparsec      (ParseError, PositionRange,
+                                               conduitParserEither, sinkParser)
+import qualified Data.Conduit.Internal as CI
 import           Data.Conduit.Network
-import           Data.Monoid                ((<>))
+import qualified Data.Conduit.TMChan          as TMC
+import           Data.Monoid                  ((<>))
 import           Data.Typeable
-import qualified Options.Applicative        as O
+import qualified Options.Applicative          as O
 
-data SolInitSequenceFail = SolInitSequenceFail String deriving (Show, Typeable)
-instance Exception SolInitSequenceFail
+data SolException = SolException String deriving (Show, Typeable)
+instance Exception SolException
 
-data SolPacket = HeartBeat Int
+data SolPacket =
+      HeartBeat Int
     | SolData ByteString
     | SolControl {
         ctrlRTS          :: Bool,
@@ -35,6 +41,8 @@ data SolPacket = HeartBeat Int
         statusRxFlushTO  :: Bool,
         statusTestMode   :: Bool
       }
+    | UserMsgToHost ByteString
+    | UserQuit
     deriving (Show)
 
 solParser :: A.Parser SolPacket
@@ -46,6 +54,12 @@ solParser = A.choice [
                              (testBit status  0) (testBit status  1) (testBit status  2)
                              (testBit status  3) (testBit status  4)
        }
+    ]
+
+userParser :: A.Parser SolPacket
+userParser = A.choice [
+    A.word8 0x1d *> return UserQuit,
+    UserMsgToHost . B.singleton <$> A.anyWord8
     ]
 
 authMsg :: ByteString -> ByteString -> ByteString
@@ -76,10 +90,15 @@ sayHello = yield $ B.pack [0x10, 0x00, 0x00, 0x00, 0x53, 0x4f, 0x4c, 0x20]
 okPacket :: Word8 -> Int -> A.Parser Bool
 okPacket x n = do { A.word8 x; bad <- A.anyWord8; A.take (n - 2); return $ bad == 0 }
 
+userMsgPacket :: ByteString -> ByteString
+userMsgPacket bs = let
+        patchedMsg = B.map (\c -> if c == 0xa then 0xd else c) bs
+    in B.concat [ B.pack [0x28, 0, 0, 0, 0, 0, 0, 0], B.pack [1, 0], patchedMsg]
+
 acceptPacketOrThrow :: A.Parser Bool -> String -> Conduit ByteString IO ByteString
 acceptPacketOrThrow p errStr = do
     packetGood <- sinkParser p
-    unless packetGood $ throwM $ SolInitSequenceFail errStr
+    unless packetGood $ throwM $ SolException errStr
 
 reactPrologue :: String -> String -> Conduit ByteString IO ByteString
 reactPrologue user pass = do
@@ -95,7 +114,7 @@ reactSolMode :: Conduit (Either ParseError (PositionRange, SolPacket)) IO ByteSt
 reactSolMode = do
     x <- await
     case x of
-        Nothing -> void (liftIO $ putStrLn "Server closed the connection.")
+        Nothing -> throwM $ SolException "Server closed the connection."
         Just m -> case m of
             Left e -> liftIO $ putStrLn $ "parse err: " ++ show e
             Right (_, msg) -> case msg of
@@ -108,6 +127,8 @@ reactSolMode = do
                     when power $ putStrLn "SOL: power state change"
                     when loopB $ putStrLn "SOL: loopback mode activated"
                     return ()
+                UserQuit -> throwM $ SolException "Seen ^]. Quitting app."
+                UserMsgToHost m -> yield $ userMsgPacket m
     reactSolMode
 
 data CLArguments = CLArguments { user :: String, pass :: String, port :: Int, host :: String }
@@ -131,4 +152,11 @@ main = let
         (fromClient, ()) <- appSource server $$+ sayHello =$ appSink server
         liftIO $ putStrLn "Authenticated. SOL active."
         (fromClient2, ()) <- fromClient $$++ reactPrologue user pass =$ appSink server
-        fromClient2 $$+- (conduitParserEither solParser =$= reactSolMode) =$ appSink server
+        (clientSource, clientFinalizer) <- CI.unwrapResumable fromClient2
+
+        let a = transPipe liftIO (clientSource =$= conduitParserEither solParser)
+        let b = transPipe liftIO (CC.stdin     =$= conduitParserEither userParser)
+
+        runResourceT $ do
+            sources <- TMC.mergeSources [a, b] 2
+            sources $$ transPipe liftIO (reactSolMode =$= appSink server)
