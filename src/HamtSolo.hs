@@ -41,6 +41,8 @@ data SolPacket =
         statusTestMode   :: Bool
       }
     | UserMsgToHost ByteString
+        -- Use bytestring instead of Word8 because maybe we want to send
+        -- line buffered strings in the future.
     | UserQuit
     deriving (Show)
 
@@ -90,8 +92,9 @@ okPacket :: Word8 -> Int -> A.Parser Bool
 okPacket x n = do { A.word8 x; bad <- A.anyWord8; A.take (n - 2); return $ bad == 0 }
 
 userMsgPacket :: ByteString -> ByteString
+-- TODO: send word16 with actual length instead of [1, 0]
 userMsgPacket bs = let
-        patchedMsg = B.map (\c -> if c == 0xa then 0xd else c) bs
+        patchedMsg = B.map (\c -> if c == 0xa then 0xd else c) bs -- transform LF to CR
     in B.concat [ B.pack [0x28, 0, 0, 0, 0, 0, 0, 0], B.pack [1, 0], patchedMsg]
 
 acceptPacketOrThrow :: A.Parser Bool -> String -> Conduit ByteString IO ByteString
