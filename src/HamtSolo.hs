@@ -2,10 +2,10 @@
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 import           Control.Exception
-import           Control.Monad                (unless, void, when)
+import           Control.Monad                (unless, when)
 import           Control.Monad.Catch          (throwM)
-import           Control.Monad.IO.Class       (liftIO, MonadIO)
-import           Control.Monad.Trans.Resource (ResourceT, runResourceT)
+import           Control.Monad.IO.Class       (liftIO)
+import           Control.Monad.Trans.Resource (runResourceT)
 import           Data.Attoparsec.Binary       (anyWord16le)
 import qualified Data.Attoparsec.ByteString   as A
 import           Data.Binary                  (Word16, Word8, encode)
@@ -15,10 +15,9 @@ import qualified Data.ByteString              as B
 import qualified Data.ByteString.Char8        as B2
 import           Data.ByteString.Lazy         (toStrict)
 import           Data.Conduit
+import           Data.Conduit.Attoparsec      (conduitParser, sinkParser)
 import qualified Data.Conduit.Combinators     as CC
-import           Data.Conduit.Attoparsec      (ParseError, PositionRange,
-                                               conduitParserEither, sinkParser)
-import qualified Data.Conduit.Internal as CI
+import qualified Data.Conduit.Internal        as CI
 import           Data.Conduit.Network
 import qualified Data.Conduit.TMChan          as TMC
 import           Data.Monoid                  ((<>))
@@ -110,26 +109,21 @@ reactPrologue user pass = do
 
     acceptPacketOrThrow (okPacket 0x21 23) "Authenticated, but Server refuses SOL."
 
-reactSolMode :: Conduit (Either ParseError (PositionRange, SolPacket)) IO ByteString
+reactSolMode :: Conduit SolPacket IO ByteString
 reactSolMode = do
-    x <- await
-    case x of
-        Nothing -> throwM $ SolException "Server closed the connection."
-        Just m -> case m of
-            Left e -> liftIO $ putStrLn $ "parse err: " ++ show e
-            Right (_, msg) -> case msg of
-                HeartBeat  n -> yield $ B.pack [0x2b, 0, 0, 0, 2, 0, 0, 0]
-                SolData    s -> liftIO $ B.putStr s
-                SolControl rts dtr brk txOF loopB power rxFlTO testMode  -> liftIO $ do
-                    when rts   $ putStrLn "SOL: RTS asserted on serial"
-                    when dtr   $ putStrLn "SOL: DTR asserted on serial"
-                    when brk   $ putStrLn "SOL: BRK asserted on serial"
-                    when power $ putStrLn "SOL: power state change"
-                    when loopB $ putStrLn "SOL: loopback mode activated"
-                    return ()
-                UserQuit -> throwM $ SolException "Seen ^]. Quitting app."
-                UserMsgToHost m -> yield $ userMsgPacket m
-    reactSolMode
+    awaitForever $ \x ->
+        case x of
+            HeartBeat  n -> yield $ B.pack [0x2b, 0, 0, 0, 2, 0, 0, 0]
+            SolData    s -> liftIO $ B.putStr s
+            SolControl rts dtr brk txOF loopB power rxFlTO testMode  -> liftIO $ do
+                when rts   $ putStrLn "SOL: RTS asserted on serial"
+                when dtr   $ putStrLn "SOL: DTR asserted on serial"
+                when brk   $ putStrLn "SOL: BRK asserted on serial"
+                when power $ putStrLn "SOL: power state change"
+                when loopB $ putStrLn "SOL: loopback mode activated"
+                return ()
+            UserQuit -> throwM $ SolException "Seen ^]. Quitting app."
+            UserMsgToHost m -> yield $ userMsgPacket m
 
 data CLArguments = CLArguments { user :: String, pass :: String, port :: Int, host :: String }
 
@@ -154,9 +148,9 @@ main = let
         (fromClient2, ()) <- fromClient $$++ reactPrologue user pass =$ appSink server
         (clientSource, clientFinalizer) <- CI.unwrapResumable fromClient2
 
-        let a = transPipe liftIO (clientSource =$= conduitParserEither solParser)
-        let b = transPipe liftIO (CC.stdin     =$= conduitParserEither userParser)
+        let sckIn = transPipe liftIO (clientSource =$= conduitParser solParser)
+        let kbdIn = transPipe liftIO (CC.stdin     =$= conduitParser userParser)
 
         runResourceT $ do
-            sources <- TMC.mergeSources [a, b] 2
-            sources $$ transPipe liftIO (reactSolMode =$= appSink server)
+            sources <- TMC.mergeSources [sckIn, kbdIn] 2
+            sources =$= awaitForever (yield . snd) $$ transPipe liftIO (reactSolMode =$= appSink server)
