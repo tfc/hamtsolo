@@ -23,6 +23,7 @@ import qualified Data.Conduit.TMChan          as TMC
 import           Data.Monoid                  ((<>))
 import           Data.Typeable
 import qualified Options.Applicative          as O
+import           System.IO                    (hPutStrLn, stderr)
 
 data SolException = SolException String deriving (Show, Typeable)
 instance Exception SolException
@@ -112,21 +113,23 @@ reactPrologue user pass = do
 
     acceptPacketOrThrow (okPacket 0x21 23) "Authenticated, but Server refuses SOL."
 
+printInfo :: String -> IO ()
+printInfo = hPutStrLn stderr
+
 reactSolMode :: Conduit SolPacket IO ByteString
-reactSolMode = do
-    awaitForever $ \x ->
-        case x of
-            HeartBeat  n -> yield $ B.pack [0x2b, 0, 0, 0, 2, 0, 0, 0]
-            SolData    s -> liftIO $ B.putStr s
-            SolControl rts dtr brk txOF loopB power rxFlTO testMode  -> liftIO $ do
-                when rts   $ putStrLn "SOL: RTS asserted on serial"
-                when dtr   $ putStrLn "SOL: DTR asserted on serial"
-                when brk   $ putStrLn "SOL: BRK asserted on serial"
-                when power $ putStrLn "SOL: power state change"
-                when loopB $ putStrLn "SOL: loopback mode activated"
-                return ()
-            UserQuit -> throwM $ SolException "Seen ^]. Quitting app."
-            UserMsgToHost m -> yield $ userMsgPacket m
+reactSolMode = awaitForever $ \x ->
+    case x of
+        HeartBeat  n -> yield $ B.pack [0x2b, 0, 0, 0, 2, 0, 0, 0]
+        SolData    s -> liftIO $ B.putStr s
+        SolControl rts dtr brk txOF loopB power rxFlTO testMode  -> liftIO $ do
+            when rts   $ printInfo "SOL: RTS asserted on serial"
+            when dtr   $ printInfo "SOL: DTR asserted on serial"
+            when brk   $ printInfo "SOL: BRK asserted on serial"
+            when power $ printInfo "SOL: power state change"
+            when loopB $ printInfo "SOL: loopback mode activated"
+            return ()
+        UserQuit -> throwM $ SolException "Seen ^]. Quitting app."
+        UserMsgToHost m -> yield $ userMsgPacket m
 
 data CLArguments = CLArguments { user :: String, pass :: String, port :: Int, host :: String }
 
@@ -145,9 +148,9 @@ main = let
     in do
     (CLArguments user pass port host) <- O.execParser opts
     runTCPClient (clientSettings port $ B2.pack host) $ \server -> do
-        liftIO $ putStrLn "Connected. Authenticating."
+        liftIO $ printInfo "Connected. Authenticating."
         (fromClient, ()) <- appSource server $$+ sayHello =$ appSink server
-        liftIO $ putStrLn "Authenticated. SOL active."
+        liftIO $ printInfo "Authenticated. SOL active."
         (fromClient2, ()) <- fromClient $$++ reactPrologue user pass =$ appSink server
         (clientSource, clientFinalizer) <- CI.unwrapResumable fromClient2
 
