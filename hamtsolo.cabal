@@ -30,6 +30,7 @@ executable hamtsolo
                      , optparse-applicative
                      , resourcet
                      , stm-conduit
+                     , unix
                      , word8
   default-language:    Haskell2010
 

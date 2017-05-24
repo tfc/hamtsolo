@@ -1,7 +1,7 @@
 {-# LANGUAGE DeriveDataTypeable  #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-import           Control.Exception
+import           Control.Exception            (Exception, bracket)
 import           Control.Monad                (unless, when)
 import           Control.Monad.Catch          (throwM)
 import           Control.Monad.IO.Class       (liftIO)
@@ -24,6 +24,8 @@ import           Data.Monoid                  ((<>))
 import           Data.Typeable
 import qualified Options.Applicative          as O
 import           System.IO                    (hPutStrLn, stderr)
+import qualified System.Posix.Terminal        as T
+import           System.Posix.IO              (stdInput)
 
 data SolException = SolException String deriving (Show, Typeable)
 instance Exception SolException
@@ -131,6 +133,21 @@ reactSolMode = awaitForever $ \x ->
         UserQuit -> throwM $ SolException "Seen ^]. Quitting app."
         UserMsgToHost m -> yield $ userMsgPacket m
 
+withTerminalSettings :: IO r -> IO r
+withTerminalSettings runStuff = bracket
+    (do
+        oldSettings <- T.getTerminalAttributes stdInput
+        let newSettings = flip T.withMinInput 1
+                        $ flip T.withTime     0
+                        $ flip (foldr id) (flip T.withoutMode <$> [T.KeyboardInterrupts, T.EnableEcho, T.ProcessInput])
+                          oldSettings
+
+        T.setTerminalAttributes stdInput newSettings T.WhenFlushed
+        return oldSettings
+    )
+    (flip (T.setTerminalAttributes stdInput) T.WhenFlushed)-- tidy up
+    (const runStuff)
+
 data CLArguments = CLArguments { user :: String, pass :: String, port :: Int, host :: String }
 
 main :: IO ()
@@ -151,12 +168,13 @@ main = let
         liftIO $ printInfo "Connected. Authenticating."
         (fromClient, ()) <- appSource server $$+ sayHello =$ appSink server
         liftIO $ printInfo "Authenticated. SOL active."
-        (fromClient2, ()) <- fromClient $$++ reactPrologue user pass =$ appSink server
-        (clientSource, clientFinalizer) <- CI.unwrapResumable fromClient2
+        withTerminalSettings $ do
+            (fromClient2, ()) <- fromClient $$++ reactPrologue user pass =$ appSink server
+            (clientSource, clientFinalizer) <- CI.unwrapResumable fromClient2
 
-        let sckIn = transPipe liftIO (clientSource =$= conduitParser solParser)
-        let kbdIn = transPipe liftIO (CC.stdin     =$= conduitParser userParser)
+            let sckIn = transPipe liftIO (clientSource =$= conduitParser solParser)
+            let kbdIn = transPipe liftIO (CC.stdin     =$= conduitParser userParser)
 
-        runResourceT $ do
-            sources <- TMC.mergeSources [sckIn, kbdIn] 2
-            sources =$= awaitForever (yield . snd) $$ transPipe liftIO (reactSolMode =$= appSink server)
+            runResourceT $ do
+                sources <- TMC.mergeSources [sckIn, kbdIn] 2
+                sources =$= awaitForever (yield . snd) $$ transPipe liftIO (reactSolMode =$= appSink server)
