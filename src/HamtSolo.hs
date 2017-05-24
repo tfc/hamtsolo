@@ -1,7 +1,7 @@
 {-# LANGUAGE DeriveDataTypeable  #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-import           Control.Exception            (Exception, bracket)
+import           Control.Exception            (Exception, bracket, try)
 import           Control.Monad                (unless, when)
 import           Control.Monad.Catch          (throwM)
 import           Control.Monad.IO.Class       (liftIO)
@@ -22,10 +22,13 @@ import           Data.Conduit.Network
 import qualified Data.Conduit.TMChan          as TMC
 import           Data.Monoid                  ((<>))
 import           Data.Typeable
+import           GHC.IO.Exception             (IOException)
 import qualified Options.Applicative          as O
-import           System.IO                    (hPutStrLn, stderr)
-import qualified System.Posix.Terminal        as T
+import           System.IO                    (BufferMode (..), hPutStrLn,
+                                               hSetBuffering, stderr, stdin,
+                                               stdout)
 import           System.Posix.IO              (stdInput)
+import qualified System.Posix.Terminal        as T
 
 data SolException = SolException String deriving (Show, Typeable)
 instance Exception SolException
@@ -136,16 +139,23 @@ reactSolMode = awaitForever $ \x ->
 withTerminalSettings :: IO r -> IO r
 withTerminalSettings runStuff = bracket
     (do
-        oldSettings <- T.getTerminalAttributes stdInput
-        let newSettings = flip T.withMinInput 1
-                        $ flip T.withTime     0
-                        $ flip (foldr id) (flip T.withoutMode <$> [T.KeyboardInterrupts, T.EnableEcho, T.ProcessInput])
-                          oldSettings
+        eOldSettings :: Either IOException T.TerminalAttributes <- try $ T.getTerminalAttributes stdInput
+        case eOldSettings of
+            Left _ -> return Nothing
+            Right oldSettings -> do
+                let newSettings = flip T.withMinInput 1
+                                $ flip T.withTime     0
+                                $ flip (foldr id) (flip T.withoutMode
+                                    <$> [T.KeyboardInterrupts, T.EnableEcho, T.ProcessInput])
+                                  oldSettings
 
-        T.setTerminalAttributes stdInput newSettings T.WhenFlushed
-        return oldSettings
+                T.setTerminalAttributes stdInput newSettings T.WhenFlushed
+                return $ Just oldSettings
     )
-    (flip (T.setTerminalAttributes stdInput) T.WhenFlushed)-- tidy up
+    (\x -> case x of
+               Just attr -> T.setTerminalAttributes stdInput attr T.WhenFlushed
+               Nothing -> return ()
+    )
     (const runStuff)
 
 data CLArguments = CLArguments { user :: String, pass :: String, port :: Int, host :: String }
@@ -163,6 +173,8 @@ main = let
     opts = O.info (O.helper <*> parser)
       ( O.fullDesc <> O.header "hamtsolo - An Intel AMT Serial-Over-LAN (SOL) client" )
     in do
+    hSetBuffering stdin NoBuffering
+    hSetBuffering stdout NoBuffering
     (CLArguments user pass port host) <- O.execParser opts
     runTCPClient (clientSettings port $ B2.pack host) $ \server -> do
         liftIO $ printInfo "Connected. Authenticating."
