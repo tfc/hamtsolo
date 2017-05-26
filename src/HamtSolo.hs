@@ -20,6 +20,7 @@ import qualified Data.Conduit.Combinators     as CC
 import qualified Data.Conduit.Internal        as CI
 import           Data.Conduit.Network
 import qualified Data.Conduit.TMChan          as TMC
+import           Data.Maybe                   (fromJust, isJust)
 import           Data.Monoid                  ((<>))
 import           Data.Typeable
 import           GHC.IO.Exception             (IOException)
@@ -152,10 +153,7 @@ withTerminalSettings runStuff = bracket
                 T.setTerminalAttributes stdInput newSettings T.WhenFlushed
                 return $ Just oldSettings
     )
-    (\x -> case x of
-               Just attr -> T.setTerminalAttributes stdInput attr T.WhenFlushed
-               Nothing -> return ()
-    )
+    (\x -> when (isJust x) $ T.setTerminalAttributes stdInput (fromJust x) T.WhenFlushed)
     (const runStuff)
 
 data CLArguments = CLArguments { user :: String, pass :: String, port :: Int, host :: String }
