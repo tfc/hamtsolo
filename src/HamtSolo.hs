@@ -104,20 +104,20 @@ userMsgPacket bs = let
         patchedMsg = B.map (\c -> if c == 0xa then 0xd else c) bs -- transform LF to CR
     in B.concat [ B.pack [0x28, 0, 0, 0, 0, 0, 0, 0], B.pack [1, 0], patchedMsg]
 
-acceptPacketOrThrow :: A.Parser Bool -> String -> Conduit ByteString IO ByteString
-acceptPacketOrThrow p errStr = do
+acceptPacketOrThrow :: String -> A.Parser Bool -> Conduit ByteString IO ByteString
+acceptPacketOrThrow errStr p = do
     packetGood <- sinkParser p
     unless packetGood $ throwM $ SolException errStr
 
 reactPrologue :: String -> String -> Conduit ByteString IO ByteString
 reactPrologue user pass = do
-    acceptPacketOrThrow (okPacket 0x11 13) "Server does not accept redirection request."
+    acceptPacketOrThrow "Server does not accept redirection request." $ okPacket 0x11 13
     yield $ authMsg (B2.pack user) (B2.pack pass)
 
-    acceptPacketOrThrow (okPacket 0x14 9) "Server does not accept authentication."
+    acceptPacketOrThrow "Server does not accept authentication." $ okPacket 0x14 9
     yield startSolMsg
 
-    acceptPacketOrThrow (okPacket 0x21 23) "Authenticated, but Server refuses SOL."
+    acceptPacketOrThrow "Authenticated, but Server refuses SOL." $ okPacket 0x21 23
 
 printInfo :: String -> IO ()
 printInfo = hPutStrLn stderr
@@ -138,7 +138,10 @@ reactSolMode = awaitForever $ \x ->
         UserMsgToHost m -> yield $ userMsgPacket m
 
 withTerminalSettings :: IO r -> IO r
-withTerminalSettings runStuff = bracket
+withTerminalSettings runStuff = let
+    setStdinAttrs a = T.setTerminalAttributes stdInput a T.WhenFlushed
+    in
+    bracket
     (do
         eOldSettings :: Either IOException T.TerminalAttributes <- try $ T.getTerminalAttributes stdInput
         case eOldSettings of
@@ -146,14 +149,13 @@ withTerminalSettings runStuff = bracket
             Right oldSettings -> do
                 let newSettings = flip T.withMinInput 1
                                 $ flip T.withTime     0
-                                $ flip (foldr id) (flip T.withoutMode
-                                    <$> [T.KeyboardInterrupts, T.EnableEcho, T.ProcessInput])
-                                  oldSettings
+                                $ foldr id oldSettings $ flip T.withoutMode
+                                    <$> [T.KeyboardInterrupts, T.EnableEcho, T.ProcessInput]
 
-                T.setTerminalAttributes stdInput newSettings T.WhenFlushed
+                setStdinAttrs newSettings
                 return $ Just oldSettings
     )
-    (\x -> when (isJust x) $ T.setTerminalAttributes stdInput (fromJust x) T.WhenFlushed)
+    (mapM_ setStdinAttrs)
     (const runStuff)
 
 data CLArguments = CLArguments { user :: String, pass :: String, port :: Int, host :: String }
