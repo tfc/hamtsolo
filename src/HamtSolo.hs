@@ -171,7 +171,10 @@ main = let
                                O.help "TCP connection port" <> O.showDefault)
         <*> O.argument O.str ( O.metavar "<host>" <> O.help "AMT host to connect to")
     opts = O.info (O.helper <*> parser)
-      ( O.fullDesc <> O.header "hamtsolo - An Intel AMT Serial-Over-LAN (SOL) client" )
+      ( O.fullDesc
+      <> O.progDesc "hamtsolo lets you connect to Intel computers with enabled \
+                     \AMT and establish a serial-over-lan (SOL) connection."
+      <> O.header "hamtsolo - An Intel AMT Serial-Over-LAN (SOL) client" )
     in do
     hSetBuffering stdin NoBuffering
     hSetBuffering stdout NoBuffering
