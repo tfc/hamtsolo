@@ -1,12 +1,12 @@
 {-# LANGUAGE DeriveDataTypeable  #-}
-{-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE LambdaCase          #-}
+{-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell     #-}
 import           Control.Applicative          ((<|>))
 import           Control.Concurrent           (threadDelay)
 import           Control.Concurrent.Async
-import           Control.Exception            (Exception, bracket, try)
+import           Control.Exception            (Exception, bracket, finally, try)
 import           Control.Monad                (unless, void, when)
 import           Control.Monad.Catch          (throwM)
 import           Control.Monad.IO.Class       (liftIO)
@@ -32,6 +32,8 @@ import           Data.Typeable
 import           Development.GitRev
 import           GHC.Conc.Sync                (atomically)
 import           GHC.IO.Exception             (IOException)
+import           Network                      (PortID (PortNumber), PortNumber,
+                                               accept, listenOn, sClose)
 import qualified Options.Applicative          as O
 import           System.Exit                  (die, exitSuccess)
 import           System.IO                    (BufferMode (..), hPutStrLn,
@@ -152,24 +154,38 @@ toSol = awaitForever $ \case
     UserMsgToHost m -> yield $ userMsgPacket m
     UserQuit        -> throwM $ SolException "Seen ^]. Quitting app."
 
-hCombine :: IORef Int
+connectionLossQuit = await >>= \case
+    Nothing -> yield UserQuit
+    Just x -> yield x >> connectionLossQuit
+
+parserToConduit p = conduitParser p =$= awaitForever (yield . snd)
+
+hCombine :: (Source IO ByteString, Sink ByteString IO ())
          -> (Source IO ByteString, Sink ByteString IO ())
-         -> (Source IO ByteString, Sink ByteString IO ())
+         -> IORef Int
          -> IO ()
-hCombine watchDog (upSource, upSink) (downSource, downSink) = do
+hCombine (upSource, upSink) (downSource, downSink) watchDog = do
+{-
+ -  downSource -> userParser -> connectionLossQuit +-> toSol -> upSink
+ -                                                 A
+ -                                                 |
+ - [user]                                    heartbeat chan    [AMT machine]
+ -                                                 A
+ -                                                 |
+ -  downSink <----- solParser <---------------- fromSol <----- upSource
+ -
+ -}
     chan :: TMC.TBMChan SolPacket <- atomically $ TMC.newTBMChan 1
 
-    let upSolSource = upSource =$= conduitParser solParser =$= awaitForever (yield . snd) =$= fromSol watchDog chan
+    let upSolSource = upSource =$= parserToConduit solParser =$= fromSol watchDog chan
         upSolSink   = toSol =$= upSink
 
-        downSolSource = downSource =$= conduitParser userParser =$= awaitForever (yield . snd)
+        downSolSource = downSource =$= parserToConduit userParser =$= connectionLossQuit
 
     runResourceT $ do
         mergedDownSolSource <- TMC.mergeSources [transPipe liftIO $ TMC.sourceTBMChan chan, transPipe liftIO downSolSource] 1
 
-        liftIO $ void $ concurrently
-            (connect mergedDownSolSource upSolSink)
-            (connect upSolSource downSink)
+        liftIO $ void $ race (mergedDownSolSource $$ upSolSink) (upSolSource $$ downSink)
 
 
 withTerminalSettings :: IO r -> IO r
@@ -210,26 +226,36 @@ withTimeout initialTimeout userF = do
                     Just (Left e) -> die $ show e
                     Just (Right _) -> exitSuccess
 
-runAmtHandling :: ClientSettings -> String -> String -> IORef Int -> IO ()
-runAmtHandling settings user pass watchDog =
-    runTCPClient settings $ \server -> do
-        liftIO $ printInfo "Connected. Authenticating."
-        (fromClient, ()) <- appSource server $$+ sayHello =$ appSink server
-        liftIO $ printInfo "Authenticated. SOL active."
-        withTerminalSettings $ do
+runAmtHandling :: ClientSettings -> String -> String -> Maybe PortNumber -> IO ()
+runAmtHandling settings user pass mTcpPort = let
+        hCombinator userConn = runTCPClient settings $ \server -> do
+            liftIO $ printInfo "Connected to AMT host. Authenticating."
+            (fromClient, ()) <- appSource server $$+ sayHello =$ appSink server
             (fromClient2, ()) <- fromClient $$++ reactPrologue user pass =$ appSink server
+            liftIO $ printInfo "Authenticated. SOL active."
             (clientSource, clientFinalizer) <- CI.unwrapResumable fromClient2
+            withTimeout 20 $ hCombine (clientSource, appSink server) userConn
+    in case mTcpPort of
+            Nothing -> withTerminalSettings $ hCombinator (CC.stdin, CC.stdout)
+            Just tcpPort -> runTCPServerOnce tcpPort hCombinator
 
-            hCombine watchDog (clientSource, appSink server) (CC.stdin, CC.stdout)
+runTCPServerOnce :: PortNumber -> ((ConduitM i0 ByteString IO (), ConduitM ByteString o0 IO ()) -> IO ()) -> IO ()
+runTCPServerOnce port f = do
+    s <- listenOn (PortNumber port)
+    putStrLn $ "Waiting for incoming TCP connection on port " ++ show port
+    (h, host, clientPort) <- accept s
+    putStrLn $ "connection from " ++ show host ++ ":" ++ show clientPort
+    f (CC.sourceHandle h, CC.sinkHandle h) `finally` sClose s
 
 versionString :: String
 versionString = "hamtsolo " ++ $(gitHash) ++ ['+' | $(gitDirty)] ++ " (" ++ $(gitCommitDate) ++ ")"
 
 data CliArguments = CliArguments {
-    user           :: String,
-    pass           :: String,
-    port           :: Int,
-    host           :: String
+    user    :: String,
+    pass    :: String,
+    port    :: Int,
+    tcpPort :: Maybe PortNumber,
+    host    :: String
 }
 
 cliArgParser :: O.Parser CliArguments
@@ -240,6 +266,8 @@ cliArgParser = CliArguments
                           O.help "Authentication password" <> O.showDefault)
     <*> O.option O.auto  (O.long "port" <> O.value 16994 <> O.metavar "<port>" <>
                           O.help "TCP connection port" <> O.showDefault)
+    <*> O.optional       (O.option O.auto   ( O.long "tcppipe" <> O.metavar "<TCP pipe port>" <>
+                          O.help "TCP port that shall be opened in order to route AMT SOL traffic through (instead of stdin/stdout)"))
     <*> O.argument O.str (O.metavar "<host>" <> O.help "AMT host to connect to")
 
 main :: IO ()
@@ -257,6 +285,6 @@ main = let
 
     case mArguments of
         Nothing -> putStrLn versionString >> exitSuccess
-        Just (CliArguments user pass port host) ->
-            withTimeout 20 $ runAmtHandling (clientSettings port $ B2.pack host) user pass
+        Just (CliArguments user pass port mTcpPort host) ->
+            runAmtHandling (clientSettings port $ B2.pack host) user pass mTcpPort
 
