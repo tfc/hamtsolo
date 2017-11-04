@@ -7,7 +7,7 @@ import           Control.Applicative          ((<|>))
 import           Control.Concurrent           (threadDelay)
 import           Control.Concurrent.Async
 import           Control.Exception            (Exception, bracket, try)
-import           Control.Monad                (unless, when)
+import           Control.Monad                (unless, void, when)
 import           Control.Monad.Catch          (throwM)
 import           Control.Monad.IO.Class       (liftIO)
 import           Control.Monad.Trans.Resource (runResourceT)
@@ -30,6 +30,7 @@ import           Data.Maybe                   (fromJust, isJust)
 import           Data.Monoid                  ((<>))
 import           Data.Typeable
 import           Development.GitRev
+import           GHC.Conc.Sync                (atomically)
 import           GHC.IO.Exception             (IOException)
 import qualified Options.Applicative          as O
 import           System.Exit                  (die, exitSuccess)
@@ -132,12 +133,12 @@ reactPrologue user pass = do
 printInfo :: String -> IO ()
 printInfo = hPutStrLn stderr
 
-reactSolMode :: IORef Int -> Conduit SolPacket IO ByteString
-reactSolMode watchDog = awaitForever $ \x -> do
+fromSol :: IORef Int -> TMC.TBMChan SolPacket -> Conduit SolPacket IO ByteString
+fromSol watchDog upStreamChan = awaitForever $ \x -> do
     liftIO $ writeIORef watchDog 20
     case x of
-        HeartBeat  n -> yield $ B.pack [0x2b, 0, 0, 0, 2, 0, 0, 0]
-        SolData    s -> liftIO $ B.putStr s
+        HeartBeat  n -> liftIO $ atomically $ TMC.writeTBMChan upStreamChan $ HeartBeat n
+        SolData    s -> yield s
         SolControl rts dtr brk txOF loopB power rxFlTO testMode  -> liftIO $ do
             when rts   $ printInfo "SOL: RTS asserted on serial"
             when dtr   $ printInfo "SOL: DTR asserted on serial"
@@ -145,7 +146,32 @@ reactSolMode watchDog = awaitForever $ \x -> do
             when power $ printInfo "SOL: power state change"
             when loopB $ printInfo "SOL: loopback mode activated"
         UserQuit -> throwM UserQuitException
-        UserMsgToHost m -> yield $ userMsgPacket m
+
+toSol :: Conduit SolPacket IO ByteString
+toSol = awaitForever $ \case
+    HeartBeat n     -> yield $ B.pack [0x2b, 0, 0, 0, 2, 0, 0, 0]
+    UserMsgToHost m -> yield $ userMsgPacket m
+    UserQuit        -> throwM $ SolException "Seen ^]. Quitting app."
+
+hCombine :: IORef Int
+         -> (Source IO ByteString, Sink ByteString IO ())
+         -> (Source IO ByteString, Sink ByteString IO ())
+         -> IO ()
+hCombine watchDog (upSource, upSink) (downSource, downSink) = do
+    chan :: TMC.TBMChan SolPacket <- atomically $ TMC.newTBMChan 1
+
+    let upSolSource = upSource =$= conduitParser solParser =$= awaitForever (yield . snd) =$= fromSol watchDog chan
+        upSolSink   = toSol =$= upSink
+
+        downSolSource = downSource =$= conduitParser userParser =$= awaitForever (yield . snd)
+
+    runResourceT $ do
+        mergedDownSolSource <- TMC.mergeSources [transPipe liftIO $ TMC.sourceTBMChan chan, transPipe liftIO downSolSource] 1
+
+        liftIO $ void $ concurrently
+            (connect mergedDownSolSource upSolSink)
+            (connect upSolSource downSink)
+
 
 withTerminalSettings :: IO r -> IO r
 withTerminalSettings runStuff = let
@@ -195,13 +221,7 @@ runAmtHandling settings user pass watchDog =
             (fromClient2, ()) <- fromClient $$++ reactPrologue user pass =$ appSink server
             (clientSource, clientFinalizer) <- CI.unwrapResumable fromClient2
 
-            let sckIn = transPipe liftIO (clientSource =$= conduitParser solParser)
-            let kbdIn = transPipe liftIO (CC.stdin     =$= conduitParser userParser)
-
-            runResourceT $ do
-                sources <- TMC.mergeSources [sckIn, kbdIn] 2
-                sources =$= awaitForever (yield . snd)
-                         $$ transPipe liftIO (reactSolMode watchDog =$= appSink server)
+            hCombine watchDog (clientSource, appSink server) (CC.stdin, CC.stdout)
 
 versionString :: String
 versionString = "hamtsolo " ++ $(gitHash) ++ ['+' | $(gitDirty)] ++ " (" ++ $(gitCommitDate) ++ ")"
@@ -240,3 +260,4 @@ main = let
         Nothing -> putStrLn versionString >> exitSuccess
         Just (CliArguments user pass port host) ->
             withTimeout 20 $ runAmtHandling (clientSettings port $ B2.pack host) user pass
+
