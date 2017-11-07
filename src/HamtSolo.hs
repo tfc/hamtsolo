@@ -66,18 +66,17 @@ data SolPacket =
 
 solParser :: A.Parser SolPacket
 solParser = A.choice [
-    do { A.word8 0x2b; A.take 3; n <- anyWord16le; A.take 2; return $ HeartBeat $ fromIntegral n },
-    do { A.word8 0x2a; A.take 7; n <- anyWord16le; s <- A.take $ fromIntegral n; return $ SolData s },
-    do { A.word8 0x29; A.take 7; control <- A.anyWord8; status <- A.anyWord8;
-         return $ SolControl (testBit control 0) (testBit control 1) (testBit control 2)
-                             (testBit status  0) (testBit status  1) (testBit status  2)
-                             (testBit status  3) (testBit status  4)
-       }
+    HeartBeat . fromIntegral <$> (A.word8 0x2b *> A.take 3 *> anyWord16le <* A.take 2),
+    SolData <$> (A.word8 0x2a *> A.take 7 *> ((A.take . fromIntegral) =<< anyWord16le)),
+    (\control status -> SolControl (testBit control 0) (testBit control 1) (testBit control 2)
+                                  (testBit status  0) (testBit status  1) (testBit status  2)
+                                  (testBit status  3) (testBit status  4))
+        <$> (A.word8 0x29 *> A.take 7 *> A.anyWord8) <*> A.anyWord8
     ]
 
 userParser :: A.Parser SolPacket
 userParser = A.choice [
-    A.word8 0x1d *> return UserQuit,
+    const UserQuit <$> A.word8 0x1d,
     UserMsgToHost . B.singleton <$> A.anyWord8
     ]
 
@@ -107,7 +106,7 @@ sayHello :: Conduit ByteString IO ByteString
 sayHello = yield $ B.pack [0x10, 0x00, 0x00, 0x00, 0x53, 0x4f, 0x4c, 0x20]
 
 okPacket :: Word8 -> Int -> A.Parser Bool
-okPacket x n = do { A.word8 x; bad <- A.anyWord8; A.take (n - 2); return $ bad == 0 }
+okPacket x n = (0 ==) <$> (A.word8 x *> A.anyWord8 <* A.take (n - 2))
 
 userMsgPacket :: ByteString -> ByteString
 -- TODO: send word16 with actual length instead of [1, 0]
