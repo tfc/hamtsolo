@@ -21,14 +21,14 @@ executable hamtsolo
   build-depends:       async                == 2.1.*
                      , attoparsec           == 0.13.*
                      , attoparsec-binary    == 0.2.*
-                     , base                 == 4.9.*
+                     , base                 == 4.10.*
                      , binary               == 0.8.*
                      , bytestring           == 0.10.*
                      , conduit              == 1.2.*
                      , conduit-combinators  == 1.1.*
-                     , conduit-extra        == 1.1.*
+                     , conduit-extra        == 1.2.*
                      , exceptions           == 0.8.*
-                     , optparse-applicative == 0.13.*
+                     , optparse-applicative == 0.14.*
                      , resourcet            == 1.1.*
                      , stm-conduit          == 3.0.*
                      , unix                 == 2.7.*
