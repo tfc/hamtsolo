@@ -1,4 +1,4 @@
-image: haskell:latest
+image: $CI_REGISTRY/ci-images/haskell:latest
 
 stages:
   - build
@@ -8,10 +8,10 @@ build:default:
   variables:
     ARTIFACT_URL: $CI_PROJECT_URL/builds/$CI_JOB_ID/artifacts/download
   script:
-    - apt-get update && apt-get install -y build-essential
-    - stack setup
-    - stack update
     - stack build
+    - mkdir build
+    - mv $(stack path --local-install-root)/bin/* build/
+    - upx --best build/*
   artifacts:
     expire_in: 1 week
     paths:
