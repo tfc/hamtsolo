@@ -17,3 +17,7 @@ build:default:
     paths:
       - build/*
 
+cache:
+  paths:
+    - .stack-work
+
