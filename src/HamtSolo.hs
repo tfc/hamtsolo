@@ -1,6 +1,8 @@
 {-# LANGUAGE DeriveDataTypeable  #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell     #-}
+import           Control.Applicative          ((<|>))
 import           Control.Exception            (Exception, bracket, try)
 import           Control.Monad                (unless, when)
 import           Control.Monad.Catch          (throwM)
@@ -23,15 +25,17 @@ import qualified Data.Conduit.TMChan          as TMC
 import           Data.Maybe                   (fromJust, isJust)
 import           Data.Monoid                  ((<>))
 import           Data.Typeable
+import           Development.GitRev
 import           GHC.IO.Exception             (IOException)
 import qualified Options.Applicative          as O
+import           System.Exit                  (exitSuccess)
 import           System.IO                    (BufferMode (..), hPutStrLn,
                                                hSetBuffering, stderr, stdin,
                                                stdout)
 import           System.Posix.IO              (stdInput)
 import qualified System.Posix.Terminal        as T
 
-data SolException = SolException String deriving (Show, Typeable)
+newtype SolException = SolException String deriving (Show, Typeable)
 instance Exception SolException
 
 data SolPacket =
@@ -158,19 +162,30 @@ withTerminalSettings runStuff = let
     (mapM_ setStdinAttrs)
     (const runStuff)
 
-data CLArguments = CLArguments { user :: String, pass :: String, port :: Int, host :: String }
+versionString :: String
+versionString = "hamtsolo " ++ $(gitHash) ++ ['+' | $(gitDirty)] ++ " (" ++ $(gitCommitDate) ++ ")"
+
+data CliArguments = CliArguments {
+    user           :: String,
+    pass           :: String,
+    port           :: Int,
+    host           :: String
+}
+
+cliArgParser :: O.Parser CliArguments
+cliArgParser = CliArguments
+    <$> O.option O.str   (O.short 'u' <> O.long "user" <> O.value "admin" <> O.metavar "<user>" <>
+                          O.help "Authentication user name" <> O.showDefault)
+    <*> O.option O.str   (O.short 'p' <> O.long "pass" <> O.value "Password123!" <> O.metavar "<password>" <>
+                          O.help "Authentication password" <> O.showDefault)
+    <*> O.option O.auto  (O.long "port" <> O.value 16994 <> O.metavar "<port>" <>
+                          O.help "TCP connection port" <> O.showDefault)
+    <*> O.argument O.str (O.metavar "<host>" <> O.help "AMT host to connect to")
 
 main :: IO ()
 main = let
-    parser = CLArguments
-        <$> O.option O.str   ( O.short 'u' <> O.long "user" <> O.value "admin" <> O.metavar "<user>" <>
-                               O.help "Authentication user name" <> O.showDefault)
-        <*> O.option O.str   ( O.short 'p' <> O.long "pass" <> O.value "Password123!" <> O.metavar "<password>" <>
-                               O.help "Authentication password" <> O.showDefault)
-        <*> O.option O.auto  ( O.long "port" <> O.value 16994 <> O.metavar "<port>" <>
-                               O.help "TCP connection port" <> O.showDefault)
-        <*> O.argument O.str ( O.metavar "<host>" <> O.help "AMT host to connect to")
-    opts = O.info (O.helper <*> parser)
+    parser = O.flag' Nothing (O.long "version" <> O.hidden) <|> (Just <$> cliArgParser)
+    opts   = O.info (O.helper <*> parser)
       ( O.fullDesc
       <> O.progDesc "hamtsolo lets you connect to Intel computers with enabled \
                      \AMT and establish a serial-over-lan (SOL) connection."
@@ -178,18 +193,22 @@ main = let
     in do
     hSetBuffering stdin NoBuffering
     hSetBuffering stdout NoBuffering
-    (CLArguments user pass port host) <- O.execParser opts
-    runTCPClient (clientSettings port $ B2.pack host) $ \server -> do
-        liftIO $ printInfo "Connected. Authenticating."
-        (fromClient, ()) <- appSource server $$+ sayHello =$ appSink server
-        liftIO $ printInfo "Authenticated. SOL active."
-        withTerminalSettings $ do
-            (fromClient2, ()) <- fromClient $$++ reactPrologue user pass =$ appSink server
-            (clientSource, clientFinalizer) <- CI.unwrapResumable fromClient2
+    mArguments <- O.execParser opts
 
-            let sckIn = transPipe liftIO (clientSource =$= conduitParser solParser)
-            let kbdIn = transPipe liftIO (CC.stdin     =$= conduitParser userParser)
+    case mArguments of
+        Nothing -> putStrLn versionString >> exitSuccess
+        Just (CliArguments user pass port host) ->
+            runTCPClient (clientSettings port $ B2.pack host) $ \server -> do
+                liftIO $ printInfo "Connected. Authenticating."
+                (fromClient, ()) <- appSource server $$+ sayHello =$ appSink server
+                liftIO $ printInfo "Authenticated. SOL active."
+                withTerminalSettings $ do
+                    (fromClient2, ()) <- fromClient $$++ reactPrologue user pass =$ appSink server
+                    (clientSource, clientFinalizer) <- CI.unwrapResumable fromClient2
 
-            runResourceT $ do
-                sources <- TMC.mergeSources [sckIn, kbdIn] 2
-                sources =$= awaitForever (yield . snd) $$ transPipe liftIO (reactSolMode =$= appSink server)
+                    let sckIn = transPipe liftIO (clientSource =$= conduitParser solParser)
+                    let kbdIn = transPipe liftIO (CC.stdin     =$= conduitParser userParser)
+
+                    runResourceT $ do
+                        sources <- TMC.mergeSources [sckIn, kbdIn] 2
+                        sources =$= awaitForever (yield . snd) $$ transPipe liftIO (reactSolMode =$= appSink server)
