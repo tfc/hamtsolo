@@ -1,12 +1,12 @@
 name:                hamtsolo
 version:             1.0.2
 synopsis:            Intel AMT serial-over-lan (SOL) client
-description:         hamtsolo lets you connect to Intel computers with enabled 
+description:         hamtsolo lets you connect to Intel computers with enabled
                      AMT and establish a serial-over-lan (SOL) connection.
 homepage:            https://github.com/tfc/hamtsolo#readme
 license:             BSD3
 license-file:        LICENSE
-author:              Jacek Galowicz 
+author:              Jacek Galowicz
 maintainer:          jacek@galowicz.de
 copyright:           2017 Jacek Galowicz
 category:            Network
