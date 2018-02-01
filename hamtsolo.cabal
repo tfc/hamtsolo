@@ -33,7 +33,6 @@ executable hamtsolo
                      , resourcet            >= 1.1
                      , stm-conduit          >= 3.0
                      , unix                 >= 2.7
-                     , word8                >= 0.1
   default-language:    Haskell2010
 
 source-repository head
