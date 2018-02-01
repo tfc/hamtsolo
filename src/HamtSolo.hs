@@ -1,8 +1,11 @@
 {-# LANGUAGE DeriveDataTypeable  #-}
 {-# LANGUAGE OverloadedStrings   #-}
+{-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell     #-}
 import           Control.Applicative          ((<|>))
+import           Control.Concurrent           (threadDelay)
+import           Control.Concurrent.Async
 import           Control.Exception            (Exception, bracket, try)
 import           Control.Monad                (unless, when)
 import           Control.Monad.Catch          (throwM)
@@ -22,20 +25,23 @@ import qualified Data.Conduit.Combinators     as CC
 import qualified Data.Conduit.Internal        as CI
 import           Data.Conduit.Network
 import qualified Data.Conduit.TMChan          as TMC
+import           Data.IORef
 import           Data.Maybe                   (fromJust, isJust)
 import           Data.Monoid                  ((<>))
 import           Data.Typeable
 import           Development.GitRev
 import           GHC.IO.Exception             (IOException)
 import qualified Options.Applicative          as O
-import           System.Exit                  (exitSuccess)
+import           System.Exit                  (die, exitSuccess)
 import           System.IO                    (BufferMode (..), hPutStrLn,
                                                hSetBuffering, stderr, stdin,
                                                stdout)
 import           System.Posix.IO              (stdInput)
 import qualified System.Posix.Terminal        as T
 
-newtype SolException = SolException String deriving (Show, Typeable)
+data SolException = UserQuitException
+                  | SolException String
+    deriving (Show)
 instance Exception SolException
 
 data SolPacket =
@@ -126,8 +132,9 @@ reactPrologue user pass = do
 printInfo :: String -> IO ()
 printInfo = hPutStrLn stderr
 
-reactSolMode :: Conduit SolPacket IO ByteString
-reactSolMode = awaitForever $ \x ->
+reactSolMode :: IORef Int -> Conduit SolPacket IO ByteString
+reactSolMode watchDog = awaitForever $ \x -> do
+    liftIO $ writeIORef watchDog 20
     case x of
         HeartBeat  n -> yield $ B.pack [0x2b, 0, 0, 0, 2, 0, 0, 0]
         SolData    s -> liftIO $ B.putStr s
@@ -137,8 +144,7 @@ reactSolMode = awaitForever $ \x ->
             when brk   $ printInfo "SOL: BRK asserted on serial"
             when power $ printInfo "SOL: power state change"
             when loopB $ printInfo "SOL: loopback mode activated"
-            return ()
-        UserQuit -> throwM $ SolException "Seen ^]. Quitting app."
+        UserQuit -> throwM UserQuitException
         UserMsgToHost m -> yield $ userMsgPacket m
 
 withTerminalSettings :: IO r -> IO r
@@ -161,6 +167,41 @@ withTerminalSettings runStuff = let
     )
     (mapM_ setStdinAttrs)
     (const runStuff)
+
+withTimeout :: Int -> (IORef Int -> IO a) -> IO ()
+withTimeout initialTimeout userF = do
+    counter <- newIORef initialTimeout
+    networkThread <- async (userF counter)
+
+    f counter networkThread
+    where
+        f c t = poll t >>= \case
+                    Nothing -> do
+                        threadDelay (10^6 :: Int)
+                        c' <- atomicModifyIORef' c (\x -> (x-1, x-1))
+                        if c' < 0
+                            then cancel t >> die "Connection timeout"
+                            else f c t
+                    Just (Left e) -> die $ show e
+                    Just (Right _) -> exitSuccess
+
+runAmtHandling :: ClientSettings -> String -> String -> IORef Int -> IO ()
+runAmtHandling settings user pass watchDog =
+    runTCPClient settings $ \server -> do
+        liftIO $ printInfo "Connected. Authenticating."
+        (fromClient, ()) <- appSource server $$+ sayHello =$ appSink server
+        liftIO $ printInfo "Authenticated. SOL active."
+        withTerminalSettings $ do
+            (fromClient2, ()) <- fromClient $$++ reactPrologue user pass =$ appSink server
+            (clientSource, clientFinalizer) <- CI.unwrapResumable fromClient2
+
+            let sckIn = transPipe liftIO (clientSource =$= conduitParser solParser)
+            let kbdIn = transPipe liftIO (CC.stdin     =$= conduitParser userParser)
+
+            runResourceT $ do
+                sources <- TMC.mergeSources [sckIn, kbdIn] 2
+                sources =$= awaitForever (yield . snd)
+                         $$ transPipe liftIO (reactSolMode watchDog =$= appSink server)
 
 versionString :: String
 versionString = "hamtsolo " ++ $(gitHash) ++ ['+' | $(gitDirty)] ++ " (" ++ $(gitCommitDate) ++ ")"
@@ -198,17 +239,4 @@ main = let
     case mArguments of
         Nothing -> putStrLn versionString >> exitSuccess
         Just (CliArguments user pass port host) ->
-            runTCPClient (clientSettings port $ B2.pack host) $ \server -> do
-                liftIO $ printInfo "Connected. Authenticating."
-                (fromClient, ()) <- appSource server $$+ sayHello =$ appSink server
-                liftIO $ printInfo "Authenticated. SOL active."
-                withTerminalSettings $ do
-                    (fromClient2, ()) <- fromClient $$++ reactPrologue user pass =$ appSink server
-                    (clientSource, clientFinalizer) <- CI.unwrapResumable fromClient2
-
-                    let sckIn = transPipe liftIO (clientSource =$= conduitParser solParser)
-                    let kbdIn = transPipe liftIO (CC.stdin     =$= conduitParser userParser)
-
-                    runResourceT $ do
-                        sources <- TMC.mergeSources [sckIn, kbdIn] 2
-                        sources =$= awaitForever (yield . snd) $$ transPipe liftIO (reactSolMode =$= appSink server)
+            withTimeout 20 $ runAmtHandling (clientSettings port $ B2.pack host) user pass
