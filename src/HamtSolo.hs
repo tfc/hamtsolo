@@ -102,7 +102,7 @@ startSolMsg = let
             [maxTxBuffer, txBufferTimeout, txOverflowTimeout, hostSessionRxTimeout, hostFifoRxFlushTimeout, heartbeatInterval],
         B.pack [0, 0, 0, 0]]
 
-sayHello :: Conduit ByteString IO ByteString
+sayHello :: ConduitT ByteString ByteString IO ()
 sayHello = yield $ B.pack [0x10, 0x00, 0x00, 0x00, 0x53, 0x4f, 0x4c, 0x20]
 
 okPacket :: Word8 -> Int -> A.Parser Bool
@@ -114,12 +114,12 @@ userMsgPacket bs = let
         patchedMsg = B.map (\c -> if c == 0xa then 0xd else c) bs -- transform LF to CR
     in B.concat [ B.pack [0x28, 0, 0, 0, 0, 0, 0, 0], B.pack [1, 0], patchedMsg]
 
-acceptPacketOrThrow :: String -> A.Parser Bool -> Conduit ByteString IO ByteString
+acceptPacketOrThrow :: String -> A.Parser Bool -> ConduitT ByteString ByteString IO ()
 acceptPacketOrThrow errStr p = do
     packetGood <- sinkParser p
     unless packetGood $ throwM $ SolException errStr
 
-reactPrologue :: String -> String -> Conduit ByteString IO ByteString
+reactPrologue :: String -> String -> ConduitT ByteString ByteString IO ()
 reactPrologue user pass = do
     acceptPacketOrThrow "Server does not accept redirection request." $ okPacket 0x11 13
     yield $ authMsg (B2.pack user) (B2.pack pass)
@@ -132,7 +132,7 @@ reactPrologue user pass = do
 printInfo :: String -> IO ()
 printInfo = hPutStrLn stderr
 
-reactSolMode :: IORef Int -> Conduit SolPacket IO ByteString
+reactSolMode :: IORef Int -> ConduitT SolPacket ByteString IO ()
 reactSolMode watchDog = awaitForever $ \x -> do
     liftIO $ writeIORef watchDog 20
     case x of
@@ -189,19 +189,20 @@ runAmtHandling :: ClientSettings -> String -> String -> IORef Int -> IO ()
 runAmtHandling settings user pass watchDog =
     runTCPClient settings $ \server -> do
         liftIO $ printInfo "Connected. Authenticating."
-        (fromClient, ()) <- appSource server $$+ sayHello =$ appSink server
+        (fromClient, ()) <- appSource server $$+ sayHello .| appSink server
         liftIO $ printInfo "Authenticated. SOL active."
         withTerminalSettings $ do
-            (fromClient2 :: CI.SealedConduitT () ByteString IO (), _) <- fromClient $$++ (reactPrologue user pass =$ appSink server)
+            (fromClient2 :: CI.SealedConduitT () ByteString IO (), _) <- fromClient $$++ (reactPrologue user pass .| appSink server)
             let clientSource = CI.unsealConduitT fromClient2
 
-            let sckIn = transPipe liftIO (clientSource =$= conduitParser solParser)
-            let kbdIn = transPipe liftIO (CC.stdin     =$= conduitParser userParser)
+            let sckIn = transPipe liftIO (clientSource .| conduitParser solParser)
+            let kbdIn = transPipe liftIO (CC.stdin     .| conduitParser userParser)
 
             runResourceT $ do
                 sources <- TMC.mergeSources [sckIn, kbdIn] 2
-                sources =$= awaitForever (yield . snd)
-                         $$ transPipe liftIO (reactSolMode watchDog =$= appSink server)
+                runConduit $
+                    sources .| awaitForever (yield . snd)
+                            .| transPipe liftIO (reactSolMode watchDog .| appSink server)
 
 versionString :: String
 versionString = "hamtsolo " ++ $(gitHash) ++ ['+' | $(gitDirty)] ++ " (" ++ $(gitCommitDate) ++ ")"
