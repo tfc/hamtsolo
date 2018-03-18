@@ -20,9 +20,9 @@ import qualified Data.ByteString              as B
 import qualified Data.ByteString.Char8        as B2
 import           Data.ByteString.Lazy         (toStrict)
 import           Data.Conduit
+import qualified Data.Conduit                 as CI
 import           Data.Conduit.Attoparsec      (conduitParser, sinkParser)
 import qualified Data.Conduit.Combinators     as CC
-import qualified Data.Conduit.Internal        as CI
 import           Data.Conduit.Network
 import qualified Data.Conduit.TMChan          as TMC
 import           Data.IORef
@@ -192,8 +192,8 @@ runAmtHandling settings user pass watchDog =
         (fromClient, ()) <- appSource server $$+ sayHello =$ appSink server
         liftIO $ printInfo "Authenticated. SOL active."
         withTerminalSettings $ do
-            (fromClient2, ()) <- fromClient $$++ reactPrologue user pass =$ appSink server
-            (clientSource, clientFinalizer) <- CI.unwrapResumable fromClient2
+            (fromClient2 :: CI.SealedConduitT () ByteString IO (), _) <- fromClient $$++ (reactPrologue user pass =$ appSink server)
+            let clientSource = CI.unsealConduitT fromClient2
 
             let sckIn = transPipe liftIO (clientSource =$= conduitParser solParser)
             let kbdIn = transPipe liftIO (CC.stdin     =$= conduitParser userParser)
