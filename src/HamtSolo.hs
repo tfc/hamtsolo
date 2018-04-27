@@ -132,9 +132,9 @@ reactPrologue user pass = do
 printInfo :: String -> IO ()
 printInfo = hPutStrLn stderr
 
-reactSolMode :: IORef Int -> ConduitT SolPacket ByteString IO ()
-reactSolMode watchDog = awaitForever $ \x -> do
-    liftIO $ writeIORef watchDog 20
+reactSolMode :: (IORef Int, Int) -> ConduitT SolPacket ByteString IO ()
+reactSolMode (counter, timeout) = awaitForever $ \x -> do
+    liftIO $ writeIORef counter timeout
     case x of
         HeartBeat  n -> yield $ B.pack [0x2b, 0, 0, 0, 2, 0, 0, 0]
         SolData    s -> liftIO $ B.putStr s
@@ -168,10 +168,10 @@ withTerminalSettings runStuff = let
     (mapM_ setStdinAttrs)
     (const runStuff)
 
-withTimeout :: Int -> (IORef Int -> IO a) -> IO ()
-withTimeout initialTimeout userF = do
-    counter <- newIORef initialTimeout
-    networkThread <- async (userF counter)
+withTimeout :: Int -> ((IORef Int, Int) -> IO a) -> IO ()
+withTimeout timeout userF = do
+    counter <- newIORef timeout
+    networkThread <- async (userF (counter, timeout))
 
     f counter networkThread
     where
@@ -185,7 +185,7 @@ withTimeout initialTimeout userF = do
                     Just (Left e) -> die $ show e
                     Just (Right _) -> exitSuccess
 
-runAmtHandling :: ClientSettings -> String -> String -> IORef Int -> IO ()
+runAmtHandling :: ClientSettings -> String -> String -> (IORef Int, Int) -> IO ()
 runAmtHandling settings user pass watchDog =
     runTCPClient settings $ \server -> do
         liftIO $ printInfo "Connected. Authenticating."
@@ -211,7 +211,8 @@ data CliArguments = CliArguments {
     user           :: String,
     pass           :: String,
     port           :: Int,
-    host           :: String
+    host           :: String,
+    timeout        :: Int
 }
 
 cliArgParser :: O.Parser CliArguments
@@ -223,6 +224,8 @@ cliArgParser = CliArguments
     <*> O.option O.auto  (O.long "port" <> O.value 16994 <> O.metavar "<port>" <>
                           O.help "TCP connection port" <> O.showDefault)
     <*> O.argument O.str (O.metavar "<host>" <> O.help "AMT host to connect to")
+    <*> O.option O.auto  (O.short 't' <> O.long "timeout" <> O.value 60 <> O.metavar "<timeout>" <>
+                          O.help "Timeout in seconds" <> O.showDefault)
 
 main :: IO ()
 main = let
@@ -239,5 +242,5 @@ main = let
 
     case mArguments of
         Nothing -> putStrLn versionString >> exitSuccess
-        Just (CliArguments user pass port host) ->
-            withTimeout 20 $ runAmtHandling (clientSettings port $ B2.pack host) user pass
+        Just (CliArguments user pass port host timeout) ->
+            withTimeout timeout $ runAmtHandling (clientSettings port $ B2.pack host) user pass
