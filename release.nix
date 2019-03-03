@@ -1,0 +1,3 @@
+{
+  hamtsolo = import ./default.nix {};
+}
