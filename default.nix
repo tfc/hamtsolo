@@ -7,4 +7,4 @@ let
     modules = [];
   };
 in
-  pkgSet.config.hsPkgs
+  pkgSet.config.hsPkgs.hamtsolo.components.exes

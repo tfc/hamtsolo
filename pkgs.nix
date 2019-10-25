@@ -1,6 +1,6 @@
 {
   extras = hackage:
     { packages = { hamtsolo = ./hamtsolo.nix; }; };
-  resolver = "lts-14.11";
+  resolver = "lts-13.19";
   modules = [ ({ lib, ... }: { packages = {}; }) { packages = {}; } ];
   }
