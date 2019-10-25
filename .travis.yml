@@ -1,30 +1,17 @@
-# Use new container infrastructure to enable caching
+language: nix
+
 sudo: false
 
-# Do not choose a language; we provide our own build tools.
-language: generic
-
-# Caching so the next build will be fast too.
-cache:
-  directories:
-  - $HOME/.stack
-
-# Ensure necessary system libraries are present
-addons:
-  apt:
-    packages:
-      - libgmp-dev
-
-before_install:
-# Download and unpack the stack executable
-- mkdir -p ~/.local/bin
-- export PATH=$HOME/.local/bin:$PATH
-- travis_retry curl -L https://www.stackage.org/stack/linux-x86_64 | tar xz --wildcards --strip-components=1 -C ~/.local/bin '*/stack'
+matrix:
+  include:
+    - env: NIX_CHANNEL=https://nixos.org/channels/nixpkgs-unstable
+    - env: NIX_CHANNEL=https://nixos.org/channels/nixos-19.09
 
 install:
-# Build dependencies
-- stack --no-terminal --install-ghc build --only-dependencies
+ - nix --version
+ - nix-channel --add "${NIX_CHANNEL}" nixpkgs
+ - travis_retry nix-channel --update
 
 script:
-# Build the package, its tests, and its docs and run the tests
-- stack --no-terminal build --haddock --no-haddock-deps
+ - nix-build
+
