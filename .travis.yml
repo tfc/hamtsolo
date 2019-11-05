@@ -2,4 +2,5 @@ language: nix
 nix: 2.3
 
 script:
-  - nix-build
+  - nix-env -i stack
+  - stack build
