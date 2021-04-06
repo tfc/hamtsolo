@@ -1,9 +1,14 @@
 let
-  nixpkgs = import ./nix/nixpkgs.nix;
-  pkgs = import nixpkgs (import (builtins.fetchTarball https://github.com/input-output-hk/haskell.nix/archive/master.tar.gz));
+  niv = import ./nix/sources.nix;
+  inherit (niv) nixpkgs haskell-nix;
+  overlays = (import haskell-nix).overlays;
+  pkgs = import nixpkgs { inherit overlays; };
 
   pkgSet = pkgs.haskell-nix.stackProject {
-    src = pkgs.haskell-nix.haskellLib.cleanGit { src = ./.; };
+    src = pkgs.haskell-nix.haskellLib.cleanGit {
+      name = "hamtsolo";
+      src = ./.;
+    };
   };
 in
   pkgSet.hamtsolo.components.all
