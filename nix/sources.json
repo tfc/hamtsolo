@@ -1,38 +1,14 @@
 {
-    "haskell-nix": {
-        "branch": "master",
-        "description": "Alternative Haskell Infrastructure for Nixpkgs",
-        "homepage": "https://input-output-hk.github.io/haskell.nix",
-        "owner": "input-output-hk",
-        "repo": "haskell.nix",
-        "rev": "fc31134a3de7a82a9c14a70426a7fda68a26f41a",
-        "sha256": "17nhnxj7lg92yb8ngylmqd2ly2vkgi0mg6h5pnhgn4w4mxs17rly",
-        "type": "tarball",
-        "url": "https://github.com/input-output-hk/haskell.nix/archive/fc31134a3de7a82a9c14a70426a7fda68a26f41a.tar.gz",
-        "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
-    },
-    "niv": {
-        "branch": "master",
-        "description": "Easy dependency management for Nix projects",
-        "homepage": "https://github.com/nmattia/niv",
-        "owner": "nmattia",
-        "repo": "niv",
-        "rev": "f73bf8d584148677b01859677a63191c31911eae",
-        "sha256": "0jlmrx633jvqrqlyhlzpvdrnim128gc81q5psz2lpp2af8p8q9qs",
-        "type": "tarball",
-        "url": "https://github.com/nmattia/niv/archive/f73bf8d584148677b01859677a63191c31911eae.tar.gz",
-        "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
-    },
     "nixpkgs": {
-        "branch": "nixos-19.09",
+        "branch": "nixos-20.09",
         "description": "A read-only mirror of NixOS/nixpkgs tracking the released channels. Send issues and PRs to",
         "homepage": "https://github.com/NixOS/nixpkgs",
         "owner": "NixOS",
-        "repo": "nixpkgs-channels",
-        "rev": "f6c1d3b113ce9e7c908991df2e8eed02f03df1bc",
-        "sha256": "08z6qbjmx64bcil3cnvflb7bv9ibdizxcr63yvhgcqzsja7m51n5",
+        "repo": "nixpkgs",
+        "rev": "d90df566caff6ef84f7bfccc2a2c95496f221d62",
+        "sha256": "0f1im9c83kyc465k5lsqyhb5saki3dgh5bb1gyyh7gmqlhyvqcax",
         "type": "tarball",
-        "url": "https://github.com/NixOS/nixpkgs-channels/archive/f6c1d3b113ce9e7c908991df2e8eed02f03df1bc.tar.gz",
+        "url": "https://github.com/NixOS/nixpkgs/archive/d90df566caff6ef84f7bfccc2a2c95496f221d62.tar.gz",
         "url_template": "https://github.com/<owner>/<repo>/archive/<rev>.tar.gz"
     }
 }
