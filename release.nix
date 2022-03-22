@@ -4,22 +4,10 @@
 }:
 
 let
-  sourceByRegex = src: regexes:
-    builtins.filterSource
-      (
-        path: type:
-          let
-            relPath = pkgs.lib.removePrefix "${toString src}/" (toString path);
-            match = builtins.match (pkgs.lib.strings.concatStringsSep "|" regexes);
-          in
-          (type == "directory" && match (relPath + "/") != null || match relPath != null)
-      )
-      src;
-
-  src = sourceByRegex ./. [
-    "src/"
-    "src/.*\.hs"
-    ".*\.cabal"
+  src = pkgs.lib.sourceByRegex ./. [
+    "src"
+    "src/.*\.hs$"
+    "hamtsolo.cabal"
     "Setup.hs"
     "LICENSE"
   ];
