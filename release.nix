@@ -19,14 +19,16 @@ in
       pkgsStatic = pkgs.pkgsMusl;
       inherit (pkgsStatic.haskell.lib) appendConfigureFlags justStaticExecutables;
       hamtsoloMusl = pkgsStatic.haskellPackages.callCabal2nix "hamtsolo" src { };
+      staticLibs = [
+        (pkgsStatic.gmp6.override { withStatic = true; })
+        (pkgsStatic.libffi.overrideAttrs (old: { dontDisableStatic = true; }))
+        (pkgsStatic.ncurses.override { enableStatic = true; })
+        pkgsStatic.zlib.static
+      ];
     in
     appendConfigureFlags (justStaticExecutables hamtsoloMusl)
       [
         "--disable-shared"
         "--ghc-option=-optl=-static"
-        "--extra-lib-dirs=${pkgsStatic.gmp6.override { withStatic = true; }}/lib"
-        "--extra-lib-dirs=${pkgsStatic.zlib.static}/lib"
-        "--extra-lib-dirs=${pkgsStatic.libffi.overrideAttrs (old: { dontDisableStatic = true; })}/lib"
-        "--extra-lib-dirs=${pkgsStatic.ncurses.override { enableStatic = true; }}/lib"
-      ];
+      ] ++ builtins.map (l: "--extra-lib-dirs=${l}/lib") staticLibs;
 }
