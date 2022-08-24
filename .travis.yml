@@ -1,6 +1,0 @@
-language: nix
-nix: 2.3
-
-script:
-  - nix-env -i stack
-  - stack build
