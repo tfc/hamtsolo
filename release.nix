@@ -25,10 +25,10 @@ in
         (pkgsStatic.ncurses.override { enableStatic = true; })
         pkgsStatic.zlib.static
       ];
-    in
-    appendConfigureFlags (justStaticExecutables hamtsoloMusl)
-      [
+      staticFlags = [
         "--disable-shared"
         "--ghc-option=-optl=-static"
       ] ++ builtins.map (l: "--extra-lib-dirs=${l}/lib") staticLibs;
+    in
+    appendConfigureFlags (justStaticExecutables hamtsoloMusl) staticFlags;
 }
