@@ -10,7 +10,7 @@
 
   outputs = inputs: inputs.flake-parts.lib.mkFlake { inherit inputs; } {
     systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
-    perSystem = { config, pkgs, system, ... }:
+    perSystem = { config, lib, pkgs, system, ... }:
       let
         src = pkgs.lib.fileset.toSource {
           root = ./.;
@@ -26,6 +26,7 @@
         packages = {
           default = config.packages.hamtsolo;
           hamtsolo = pkgs.haskellPackages.callCabal2nix "hamtsolo" src { };
+        } // lib.optionalAttrs (with pkgs.stdenv; isLinux && is64bit) {
           hamtsolo-static =
             let
               pkgsStatic = pkgs.pkgsMusl;
