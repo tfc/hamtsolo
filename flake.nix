@@ -51,9 +51,7 @@
             cabal-install
             ghcid
           ];
-          shellHook = ''
-            ${config.checks.pre-commit-check.shellHook}
-          '';
+          inherit (config.checks.pre-commit-check) shellHook;
         };
 
         checks = {
