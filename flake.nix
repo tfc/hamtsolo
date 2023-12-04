@@ -34,7 +34,7 @@
               hamtsoloMusl = pkgsStatic.haskellPackages.callCabal2nix "hamtsolo" src { };
               staticLibs = [
                 (pkgsStatic.gmp6.override { withStatic = true; })
-                (pkgsStatic.libffi.overrideAttrs (old: { dontDisableStatic = true; }))
+                (pkgsStatic.libffi.overrideAttrs (_: { dontDisableStatic = true; }))
                 (pkgsStatic.ncurses.override { enableStatic = true; })
                 pkgsStatic.zlib.static
               ];
@@ -47,7 +47,7 @@
         };
 
         devShells.default = pkgs.haskellPackages.shellFor {
-          packages = p: [ config.packages.hamtsolo ];
+          packages = _: [ config.packages.hamtsolo ];
           buildInputs = with pkgs; [
             cabal-install
             ghcid
@@ -60,6 +60,7 @@
             src = ./.;
             hooks = {
               cabal-fmt.enable = true;
+              deadnix.enable = true;
               hlint.enable = true;
               nixpkgs-fmt.enable = true;
               statix.enable = true;
