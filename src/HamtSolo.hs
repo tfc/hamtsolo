@@ -210,9 +210,8 @@ withTerminalSettings runStuff =
             let newSettings =
                   flip T.withMinInput 1
                     $   flip T.withTime 0
-                    $   foldr id oldSettings
-                    $   flip T.withoutMode
-                    <$> [T.KeyboardInterrupts, T.EnableEcho, T.ProcessInput]
+                    $   foldr (flip T.withoutMode) oldSettings
+                    [T.KeyboardInterrupts, T.EnableEcho, T.ProcessInput]
 
             setStdinAttrs newSettings
             return $ Just oldSettings
